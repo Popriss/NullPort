@@ -4,7 +4,7 @@ import { compressImage } from '../utils/compression';
 import { isImageUrl } from '../utils/regex';
 import Button from '../components/Button';
 
-const renderizarMensagem = (texto) => {
+const renderizarMensagem = (texto, onImageClick) => {
   const regexImagem = /!\[.*?\]\((.*?)\)/g;
   const partes = texto.split(regexImagem);
 
@@ -15,8 +15,9 @@ const renderizarMensagem = (texto) => {
           key={index} 
           src={parte} 
           alt="Anexo" 
-          className="max-w-sm rounded-lg my-2 shadow-md"
+          className="max-w-sm rounded-lg my-2 shadow-md cursor-zoom-in hover:opacity-90 transition-opacity"
           loading="lazy"
+          onClick={() => onImageClick(parte)} // Adicionamos o clique aqui!
         />
       );
     }
@@ -31,6 +32,7 @@ export default function ChatBox({ user, onLogout }) {
   const [uploading, setUploading] = useState(false);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const [imagemAmpliada, setImagemAmpliada] = useState(null);
 
   // Solicitar permissão de notificação push
   useEffect(() => {
@@ -148,11 +150,16 @@ export default function ChatBox({ user, onLogout }) {
                   <img
                     src={msg.conteudo.trim()}
                     alt="Anexo de mídia"
-                    className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-pointer"
-                    onClick={() => window.open(msg.conteudo.trim(), '_blank')}
+                    // Trocamos o cursor-pointer por cursor-zoom-in
+                    className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-zoom-in"
+                    // Substituímos o window.open pela nossa função de estado
+                    onClick={() => setImagemAmpliada(msg.conteudo.trim())}
                   />
                 ) : (
-                  <p className="whitespace-pre-wrap break-words">{renderizarMensagem(msg.conteudo)}</p>
+                  <p className="whitespace-pre-wrap break-words">
+                    {/* Passamos o setImagemAmpliada para o texto markdown também! */}
+                    {renderizarMensagem(msg.conteudo, setImagemAmpliada)}
+                  </p>
                 )}
               </div>
             </div>
@@ -192,6 +199,28 @@ export default function ChatBox({ user, onLogout }) {
           {sending ? '...' : 'Enviar'}
         </Button>
       </form>
+      {imagemAmpliada && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 cursor-zoom-out transition-all"
+          onClick={() => setImagemAmpliada(null)} 
+        >
+          <div className="relative max-w-5xl max-h-[90vh]">
+            <img
+              src={imagemAmpliada}
+              alt="Ampliada"
+              className="w-auto h-auto max-w-full max-h-[90vh] rounded-lg shadow-2xl cursor-default"
+              onClick={(e) => e.stopPropagation()} 
+            />
+            <button
+              onClick={() => setImagemAmpliada(null)}
+              className="absolute -top-4 -right-4 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg transition-colors"
+              title="Fechar"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
