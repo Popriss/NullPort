@@ -21,6 +21,7 @@ import remarkGfm from 'remark-gfm';
     }
     return <span key={index}>{parte}</span>;
   });
+  
 
 export default function ChatBox({ user, onLogout }) {
   const [messages, setMessages] = useState([]);
