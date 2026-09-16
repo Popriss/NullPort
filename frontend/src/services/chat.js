@@ -28,6 +28,20 @@ export function subscribeToMessages(onMessage, onError) {
 
   const eventSource = new EventSource(`${BASE_URL}/api/chat/stream?token=${encodeURIComponent(token)}`);
 
+  export async function reactToMessage(messageId, emoji) {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`/api/chat/messages/${messageId}/react`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ emoji })
+  });
+  if (!response.ok) throw new Error("Erro ao reagir à mensagem");
+  return response.json();
+}
+
   eventSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
