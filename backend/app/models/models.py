@@ -10,7 +10,7 @@ class Sala(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nome_url = Column(String, unique=True, index=True, nullable=False)
-    senha_hash = Column(String, nullable=False)
+    hash_senha = Column(String, nullable=False) # 👈 Alinhado com o banco (hash_senha)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     mensagens = relationship("Mensagem", back_populates="sala", cascade="all, delete-orphan")
@@ -25,7 +25,6 @@ class Mensagem(Base):
     conteudo = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Colunas de Resposta e Reações
     reply_to_id = Column(UUID(as_uuid=True), ForeignKey("mensagens.id", ondelete="SET NULL"), nullable=True)
     reacoes = Column(JSONB, server_default='{}', nullable=False)
 
