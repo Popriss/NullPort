@@ -35,10 +35,12 @@ def get_messages(
     messages = (
         db.query(Mensagem)
         .filter(Mensagem.sala_id == UUID(sala_id))
-        .order_by(Mensagem.created_at.asc())
+        .order_by(Mensagem.created_at.desc())
         .limit(limit)
         .all()
     )
+    messages.reverse()
+
     return messages
 
 @router.post("/messages", response_model=MessageOut)
