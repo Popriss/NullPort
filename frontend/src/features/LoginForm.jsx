@@ -18,6 +18,7 @@ export default function LoginForm({ onLoginSuccess }) {
     }
 
     try {
+      setSending(true); // ou setLoading(true) conforme seu código
       setLoading(true);
       setError('');
       const data = await enterRoom({
@@ -25,6 +26,12 @@ export default function LoginForm({ onLoginSuccess }) {
         senha,
         nickname: nickname.trim(),
       });
+      
+      // 👇 SALVA O TOKEN AQUI ANTES DE PASSAR ADIANTE 👇
+      if (data && data.access_token) {
+        localStorage.setItem('token', data.access_token);
+      }
+
       onLoginSuccess(data);
     } catch (err) {
       setError(err.message || 'Falha ao acessar sala.');
