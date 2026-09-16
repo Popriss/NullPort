@@ -4,6 +4,26 @@ import { compressImage } from '../utils/compression';
 import { isImageUrl } from '../utils/regex';
 import Button from '../components/Button';
 
+const renderizarMensagem = (texto) => {
+  const regexImagem = /!\[.*?\]\((.*?)\)/g;
+  const partes = texto.split(regexImagem);
+
+  return partes.map((parte, index) => {
+    if (index % 2 === 1) {
+      return (
+        <img 
+          key={index} 
+          src={parte} 
+          alt="Anexo" 
+          className="max-w-sm rounded-lg my-2 shadow-md"
+          loading="lazy"
+        />
+      );
+    }
+    return <span key={index}>{parte}</span>;
+  });
+};
+
 export default function ChatBox({ user, onLogout }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -132,7 +152,7 @@ export default function ChatBox({ user, onLogout }) {
                     onClick={() => window.open(msg.conteudo.trim(), '_blank')}
                   />
                 ) : (
-                  <p className="whitespace-pre-wrap break-words">{msg.conteudo}</p>
+                  <p className="whitespace-pre-wrap break-words">{renderizarMensagem(msg.conteudo)}</p>
                 )}
               </div>
             </div>
