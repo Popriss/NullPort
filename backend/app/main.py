@@ -34,5 +34,6 @@ def root():
     return {"message": "NullPort API está rodando perfeitamente!", "status": "online"}
 
 @app.get("/health")
+@app.head("/health")
 def health_check():
     return {"status": "alive"}
