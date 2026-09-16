@@ -3,10 +3,8 @@ import { fetchMessages, sendMessage, uploadImage, subscribeToMessages } from '..
 import { compressImage } from '../utils/compression';
 import { isImageUrl } from '../utils/regex';
 import Button from '../components/Button';
-
-const renderizarMensagem = (texto, onImageClick) => {
-  const regexImagem = /!\[.*?\]\((.*?)\)/g;
-  const partes = texto.split(regexImagem);
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
   return partes.map((parte, index) => {
     if (index % 2 === 1) {
@@ -23,7 +21,6 @@ const renderizarMensagem = (texto, onImageClick) => {
     }
     return <span key={index}>{parte}</span>;
   });
-};
 
 export default function ChatBox({ user, onLogout }) {
   const [messages, setMessages] = useState([]);
@@ -163,16 +160,36 @@ export default function ChatBox({ user, onLogout }) {
                   <img
                     src={msg.conteudo.trim()}
                     alt="Anexo de mídia"
-                    // Trocamos o cursor-pointer por cursor-zoom-in
                     className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-zoom-in"
-                    // Substituímos o window.open pela nossa função de estado
                     onClick={() => setImagemAmpliada(msg.conteudo.trim())}
                   />
                 ) : (
-                  <p className="whitespace-pre-wrap break-words">
-                    {/* Passamos o setImagemAmpliada para o texto markdown também! */}
-                    {renderizarMensagem(msg.conteudo, setImagemAmpliada)}
-                  </p>
+                  <div className="text-sm break-words whitespace-pre-wrap">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        // Garante que imagens em Markdown também abram no visualizador
+                        img: ({ node, ...props }) => (
+                          <img
+                            {...props}
+                            className="max-w-sm rounded-lg my-2 shadow-md cursor-zoom-in hover:opacity-90 transition-opacity"
+                            loading="lazy"
+                            onClick={() => setImagemAmpliada(props.src)}
+                          />
+                        ),
+                        p: ({ node, ...props }) => <p className="mb-1 last:mb-0" {...props} />,
+                        a: ({ node, ...props }) => <a className="text-emerald-400 hover:underline font-medium" target="_blank" rel="noopener noreferrer" {...props} />,
+                        code: ({ node, inline, ...props }) => 
+                          inline ? (
+                            <code className="bg-black/30 px-1.5 py-0.5 rounded text-emerald-300 font-mono text-[13px]" {...props} />
+                          ) : (
+                            <pre className="bg-black/40 p-3 rounded-md overflow-x-auto my-2 border border-zinc-700/50"><code className="font-mono text-[13px] text-zinc-200" {...props} /></pre>
+                          )
+                      }}
+                    >
+                      {msg.conteudo}
+                    </ReactMarkdown>
+                  </div>
                 )}
               </div>
               <button 
