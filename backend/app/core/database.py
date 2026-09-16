@@ -15,6 +15,10 @@ for env_path in [
 
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Remove aspas e espaços acidentais (comuns ao colar em painéis como Render/Vercel)
+if SQLALCHEMY_DATABASE_URL:
+    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.strip().strip('"\'')
+
 # Se não houver DATABASE_URL definido ou se estiver vazio, usa SQLite local temporariamente
 if not SQLALCHEMY_DATABASE_URL or SQLALCHEMY_DATABASE_URL.strip() == "":
     SQLALCHEMY_DATABASE_URL = "sqlite:///./nullport.db"

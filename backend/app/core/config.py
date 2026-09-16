@@ -14,9 +14,9 @@ for env_path in [
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "NullPort API"
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./nullport.db")
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "modesto_chat_nullport_837498273948723_qualquer_coisa")
-    ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./nullport.db").strip().strip('"\'')
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "modesto_chat_nullport_837498273948723_qualquer_coisa").strip().strip('"\'')
+    ALGORITHM: str = os.getenv("ALGORITHM", "HS256").strip().strip('"\'')
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
     
     # Cloudflare R2 (opcional para testes)
