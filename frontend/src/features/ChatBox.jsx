@@ -6,23 +6,6 @@ import Button from '../components/Button';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-  return partes.map((parte, index) => {
-    if (index % 2 === 1) {
-      return (
-        <img 
-          key={index} 
-          src={parte} 
-          alt="Anexo" 
-          className="max-w-sm rounded-lg my-2 shadow-md cursor-zoom-in hover:opacity-90 transition-opacity"
-          loading="lazy"
-          onClick={() => onImageClick(parte)} // Adicionamos o clique aqui!
-        />
-      );
-    }
-    return <span key={index}>{parte}</span>;
-  });
-  
-
 export default function ChatBox({ user, onLogout }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
