@@ -17,10 +17,12 @@ class Sala(Base):
 class Mensagem(Base):
     __tablename__ = "mensagens"
 
-    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
-    sala_id = Column(Uuid, ForeignKey("salas.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sala_id = Column(UUID(as_uuid=True), ForeignKey("salas.id"))
     autor_nickname = Column(String, nullable=False)
-    conteudo = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    sala = relationship("Sala", back_populates="mensagens")
+    conteudo = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # 👇 ADICIONE ESTAS DUAS LINHAS 👇
+    reply_to_id = Column(UUID(as_uuid=True), ForeignKey("mensagens.id", ondelete="SET NULL"), nullable=True)
+    reacoes = Column(JSONB, server_default='{}')

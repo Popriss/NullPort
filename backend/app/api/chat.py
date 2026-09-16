@@ -7,6 +7,7 @@ import asyncio
 import os
 import requests
 from uuid import UUID
+from pydantic import BaseModel # 👈 NOVO: Importamos o BaseModel para a reação
 
 from app.core.database import get_db
 from app.models.models import Sala, Mensagem
@@ -15,6 +16,10 @@ from app.services.auth import decode_access_token
 from app.services.sse import manager
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+# 👈 NOVO: Schema rápido para receber a reação do frontend
+class ReactionCreate(BaseModel):
+    emoji: str
 
 def get_current_user(authorization: Optional[str] = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
@@ -55,7 +60,8 @@ async def send_message(
     new_msg = Mensagem(
         sala_id=UUID(sala_id),
         autor_nickname=autor_nickname,
-        conteudo=msg_in.conteudo
+        conteudo=msg_in.conteudo,
+        reply_to_id=msg_in.reply_to_id # 👈 NOVO: Agora salva a resposta
     )
     db.add(new_msg)
     db.commit()
@@ -63,15 +69,65 @@ async def send_message(
 
     # Broadcast via SSE to room
     msg_dict = {
+        "type": "new_message", # 👈 NOVO: Avisa o React que é uma mensagem
         "id": str(new_msg.id),
         "sala_id": str(new_msg.sala_id),
         "autor_nickname": new_msg.autor_nickname,
         "conteudo": new_msg.conteudo,
-        "created_at": new_msg.created_at.isoformat()
+        "created_at": new_msg.created_at.isoformat(),
+        "reply_to_id": str(new_msg.reply_to_id) if new_msg.reply_to_id else None, # 👈 NOVO
+        "reacoes": new_msg.reacoes # 👈 NOVO
     }
     await manager.broadcast_to_room(sala_id, msg_dict)
 
     return new_msg
+
+# 👈 NOVO: Rota inteira dedicada para lidar com as reações
+@router.post("/messages/{message_id}/react")
+async def react_to_message(
+    message_id: UUID,
+    reaction: ReactionCreate,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    sala_id = user["sala_id"]
+    nickname = user["nickname"]
+
+    # Busca a mensagem no banco
+    msg = db.query(Mensagem).filter(Mensagem.id == message_id, Mensagem.sala_id == UUID(sala_id)).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada")
+
+    # Pega o dicionário atual de reações (ou cria um vazio)
+    reacoes = dict(msg.reacoes) if msg.reacoes else {}
+    emoji = reaction.emoji
+
+    # Se o emoji não existe no dict, cria uma lista vazia pra ele
+    if emoji not in reacoes:
+        reacoes[emoji] = []
+    
+    # Toggle da reação (coloca ou tira o nome do usuário)
+    if nickname in reacoes[emoji]:
+        reacoes[emoji].remove(nickname)
+        if not reacoes[emoji]: # Se a lista ficou vazia, deleta o emoji
+            del reacoes[emoji]
+    else:
+        reacoes[emoji].append(nickname)
+
+    # Salva no banco de dados
+    msg.reacoes = reacoes
+    db.commit()
+    db.refresh(msg)
+
+    # Avisa todo mundo da sala que a reação mudou via SSE!
+    event_data = {
+        "type": "reaction_update",
+        "message_id": str(msg.id),
+        "reacoes": msg.reacoes
+    }
+    await manager.broadcast_to_room(sala_id, event_data)
+
+    return msg
 
 @router.get("/stream")
 async def chat_stream(request: Request, token: str):
