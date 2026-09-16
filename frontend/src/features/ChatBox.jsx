@@ -112,6 +112,20 @@ export default function ChatBox({ user, onLogout }) {
     }
   };
 
+  const handleKeyDown = (e) => {
+    // Se apertar Enter SEM o Shift, envia a mensagem
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault(); // Evita que ele pule a linha antes de enviar
+      handleSend(e);
+    }
+  };
+
+  const copiarTexto = (texto) => {
+    navigator.clipboard.writeText(texto);
+    // Um alert simples só para testar, depois podemos colocar um Toast bonitão
+    alert("Mensagem copiada!");
+  };
+
   return (
     <div className="flex flex-col h-[85vh] w-full max-w-4xl mx-auto bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
       {/* Header */}
@@ -135,8 +149,7 @@ export default function ChatBox({ user, onLogout }) {
           const isImage = isImageUrl(msg.conteudo.trim());
 
           return (
-            <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-              <span className="text-[11px] font-medium text-zinc-500 mb-1 px-1">
+              <div key={msg.id} className={`flex flex-col group ${isMe ? 'items-end' : 'items-start'}`}>              <span className="text-[11px] font-medium text-zinc-500 mb-1 px-1">
                 {msg.autor_nickname} • {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
               <div
@@ -162,6 +175,12 @@ export default function ChatBox({ user, onLogout }) {
                   </p>
                 )}
               </div>
+              <button 
+                onClick={() => copiarTexto(msg.conteudo)}
+                className="opacity-0 group-hover:opacity-100 text-[10px] text-zinc-500 hover:text-emerald-400 transition-opacity mt-1 cursor-pointer"
+              >
+                Copiar
+              </button>
             </div>
           );
         })}
@@ -187,12 +206,13 @@ export default function ChatBox({ user, onLogout }) {
           {uploading ? '⏳' : '📷'}
         </button>
 
-        <input
-          type="text"
+        <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder="Digite sua mensagem..."
-          className="flex-1 px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500"
+          className="flex-1 px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[44px] max-h-32 overflow-y-auto"
+          rows="1"
         />
 
         <Button type="submit" disabled={sending || !input.trim()}>
