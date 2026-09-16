@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
 from app.core.database import Base
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 class Sala(Base):
     __tablename__ = "salas"
