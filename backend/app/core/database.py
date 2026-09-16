@@ -13,20 +13,36 @@ for env_path in [
     if env_path.exists():
         load_dotenv(env_path, override=False)
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
+def clean_database_url(raw_url: str | None) -> str:
+    if not raw_url:
+        return "sqlite:///./nullport.db"
+    
+    url = raw_url.strip()
+    
+    # Remove prefixo se colaram a linha inteira "DATABASE_URL=..."
+    if url.startswith("DATABASE_URL="):
+        url = url[len("DATABASE_URL="):].strip()
+        
+    # Remove aspas externas simples ou duplas
+    url = url.strip('"\'').strip()
+    
+    # Compatibilidade: converte postgres:// para postgresql:// exigido pelo SQLAlchemy
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+        
+    return url
 
-# Remove aspas e espaços acidentais (comuns ao colar em painéis como Render/Vercel)
-if SQLALCHEMY_DATABASE_URL:
-    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.strip().strip('"\'')
+SQLALCHEMY_DATABASE_URL = clean_database_url(os.getenv("DATABASE_URL"))
 
-# Se não houver DATABASE_URL definido ou se estiver vazio, usa SQLite local temporariamente
-if not SQLALCHEMY_DATABASE_URL or SQLALCHEMY_DATABASE_URL.strip() == "":
-    SQLALCHEMY_DATABASE_URL = "sqlite:///./nullport.db"
-
-if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-else:
-    engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+# Inicialização segura do engine com fallback para SQLite se a URL for inválida
+try:
+    if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+        engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+    else:
+        engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+except Exception as e:
+    print(f"[AVISO BANCO DE DADOS] Falha ao conectar em '{SQLALCHEMY_DATABASE_URL}': {e}. Usando SQLite local.")
+    engine = create_engine("sqlite:///./nullport.db", connect_args={"check_same_thread": False})
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
