@@ -29,7 +29,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
 def get_messages(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
-    limit: int = 50
+    limit: int = 500000
 ):
     sala_id = user["sala_id"]
     messages = (
