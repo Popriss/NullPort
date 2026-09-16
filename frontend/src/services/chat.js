@@ -1,36 +1,46 @@
-import { request } from './api';
-
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 export async function fetchMessages() {
-  return request('/api/chat/messages');
+  const token = localStorage.getItem('token');
+  const response = await fetch(`${API_URL}/api/chat/messages`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) throw new Error("Erro ao buscar mensagens");
+  return response.json();
 }
 
-export async function sendMessage(conteudo) {
-  return request('/api/chat/messages', {
+export async function sendMessage(conteudo, replyToId = null) {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`${API_URL}/api/chat/messages`, {
     method: 'POST',
-    body: JSON.stringify({ conteudo }),
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ conteudo, reply_to_id: replyToId })
   });
+  if (!response.ok) throw new Error("Erro ao enviar mensagem");
+  return response.json();
 }
 
 export async function uploadImage(file) {
+  const token = localStorage.getItem('token');
   const formData = new FormData();
   formData.append('file', file);
-  return request('/api/chat/upload', {
+
+  const response = await fetch(`${API_URL}/api/chat/upload`, {
     method: 'POST',
-    body: formData,
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: formData
   });
+  if (!response.ok) throw new Error("Erro no upload da imagem");
+  return response.json();
 }
 
-export function subscribeToMessages(onMessage, onError) {
-  const token = localStorage.getItem('nullport_token');
-  if (!token) return null;
-
-  const eventSource = new EventSource(`${BASE_URL}/api/chat/stream?token=${encodeURIComponent(token)}`);
-
-  export async function reactToMessage(messageId, emoji) {
+// 👈 Esta é a função nova de reações que entrou agora
+export async function reactToMessage(messageId, emoji) {
   const token = localStorage.getItem('token');
-  const response = await fetch(`/api/chat/messages/${messageId}/react`, {
+  const response = await fetch(`${API_URL}/api/chat/messages/${messageId}/react`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -42,17 +52,22 @@ export function subscribeToMessages(onMessage, onError) {
   return response.json();
 }
 
+export function subscribeToMessages(onMessageCallback) {
+  const token = localStorage.getItem('token');
+  const eventSource = new EventSource(`${API_URL}/api/chat/stream?token=${token}`);
+
   eventSource.onmessage = (event) => {
+    if (event.data === ": keep-alive") return;
     try {
       const data = JSON.parse(event.data);
-      onMessage(data);
+      onMessageCallback(data);
     } catch (err) {
-      console.error("Erro ao processar mensagem SSE:", err);
+      console.error("Erro ao parsear evento do SSE:", err);
     }
   };
 
   eventSource.onerror = (err) => {
-    if (onError) onError(err);
+    console.error("Erro na conexão SSE:", err);
   };
 
   return () => {
