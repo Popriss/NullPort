@@ -32,3 +32,7 @@ app.include_router(api_router, prefix="/api")
 @app.get("/")
 def root():
     return {"message": "NullPort API está rodando perfeitamente!", "status": "online"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "alive"}
