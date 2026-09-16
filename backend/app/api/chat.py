@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import json
 import asyncio
+import os
+import requests
 from uuid import UUID
 
 from app.core.database import get_db
@@ -11,7 +13,6 @@ from app.models.models import Sala, Mensagem
 from app.schemas.chat import MessageCreate, MessageOut
 from app.services.auth import decode_access_token
 from app.services.sse import manager
-from app.services.storage import upload_image_to_r2
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -108,12 +109,32 @@ async def upload_image(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user)
 ):
-    if file.content_type not in ["image/png", "image/jpeg", "image/gif", "image/webp"]:
+    # Validamos o formato
+    if file.content_type not in ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]:
         raise HTTPException(status_code=400, detail="Formato de arquivo não suportado.")
 
+    # Lemos o arquivo e validamos o tamanho (< 2MB)
     contents = await file.read()
     if len(contents) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Arquivo excede o limite de tamanho.")
 
-    url = await upload_image_to_r2(contents, file.filename, file.content_type)
-    return {"url": url}
+    # Pegamos a chave do ImgBB no .env
+    api_key = os.getenv("IMGBB_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="API Key do ImgBB não configurada")
+
+    # Enviamos para o ImgBB via POST
+    url_imgbb = "https://api.imgbb.com/1/upload"
+    payload = {"key": api_key}
+    files = {"image": (file.filename, contents, file.content_type)}
+    
+    response = requests.post(url_imgbb, data=payload, files=files)
+    
+    # Se der certo, devolvemos a URL pro frontend
+    if response.status_code == 200:
+        data = response.json()
+        link_direto = data["data"]["url"]
+        return {"url": link_direto}
+    else:
+        print("Erro ImgBB:", response.text)
+        raise HTTPException(status_code=500, detail="Erro ao salvar a imagem no servidor externo.")
