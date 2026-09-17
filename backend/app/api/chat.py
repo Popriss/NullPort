@@ -1,142 +1,524 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Tuple
 import json
 import asyncio
 import os
 import requests
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
-from pydantic import BaseModel # 👈 NOVO: Importamos o BaseModel para a reação
+from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import Sala, Mensagem
+from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia
 from app.schemas.chat import MessageCreate, MessageOut
-from app.services.auth import decode_access_token
+from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate
+from app.services.auth import decode_access_token, get_password_hash, verify_password
 from app.services.sse import manager
+from app.services.storage import validate_and_sanitize_image, upload_image_to_r2
+from app.core.security import rate_limiter
+from app.core.rbac import get_current_user, require_chat_role, ROLE_WEIGHTS
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# 👈 NOVO: Schema rápido para receber a reação do frontend
 class ReactionCreate(BaseModel):
     emoji: str
 
-def get_current_user(authorization: Optional[str] = Header(None)):
+class ReportCreate(BaseModel):
+    mensagem_id: UUID
+    sala_id: UUID
+    motivo: str
+
+# Helper para compatibilidade legada e nova autenticação
+def get_user_or_room_auth(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token de autorização ausente ou inválido.")
     token = authorization.split(" ")[1]
     payload = decode_access_token(token)
-    if not payload or "sala_id" not in payload:
+    if not payload:
         raise HTTPException(status_code=401, detail="Token inválido ou expirado.")
     return payload
 
-@router.get("/messages", response_model=List[MessageOut])
-def get_messages(
-    user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    limit: int = 500000
+
+# --- GESTÃO DE SALAS ---
+
+@router.get("/rooms", response_model=List[RoomOut])
+def list_available_rooms(
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    sala_id = user["sala_id"]
+    """Lista todas as salas que o usuário tem acesso ou salas públicas."""
+    # Se for site admin, vê todas as salas
+    if user.is_site_admin:
+        return db.query(Sala).order_by(Sala.created_at.desc()).all()
+
+    # Usuário comum vê salas que é membro ou salas raiz permanentes
+    membro_salas_ids = [m.sala_id for m in user.membros]
+    salas = db.query(Sala).filter(
+        (Sala.id.in_(membro_salas_ids)) | 
+        ((Sala.is_permanente == True) & (Sala.parent_id.is_(None)))
+    ).order_by(Sala.created_at.desc()).all()
+    return salas
+
+
+@router.post("/rooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
+def create_room(
+    req: RoomCreate,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Criação de sala:
+    - Usuário comum: apenas salas temporárias com TTL (expires_at calculado).
+    - Site Admin: pode criar permanentes ou temporárias.
+    """
+    existing = db.query(Sala).filter(Sala.nome_url == req.nome_url.strip().lower()).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Identificador de URL já em uso.")
+
+    tipo = req.tipo_sala or "temporaria"
+    if tipo == "permanente" and not user.is_site_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Apenas Administradores do Site podem criar salas permanentes."
+        )
+
+    now = datetime.now(timezone.utc)
+    expires_at = None
+    is_perm = False
+
+    if tipo == "permanente":
+        is_perm = True
+    else:
+        ttl = req.ttl_minutes if req.ttl_minutes else 1440
+        expires_at = now + timedelta(minutes=ttl)
+
+    hashed_senha = get_password_hash(req.senha) if req.senha else None
+
+    room = Sala(
+        nome_url=req.nome_url.strip().lower(),
+        titulo=req.titulo.strip(),
+        hash_senha=hashed_senha,
+        parent_id=req.parent_id,
+        tipo_sala=tipo,
+        is_permanente=is_perm,
+        expires_at=expires_at,
+        max_membros=req.max_membros or 50,
+        created_by=user.id
+    )
+    db.add(room)
+    db.commit()
+    db.refresh(room)
+
+    # Criador se torna admin do chat
+    membro = MembroSala(
+        sala_id=room.id,
+        usuario_id=user.id,
+        role="admin",
+        is_muted=False
+    )
+    db.add(membro)
+    db.commit()
+
+    return room
+
+
+@router.post("/rooms/{room_id}/join", response_model=MemberOut)
+def join_room(
+    room_id: UUID,
+    senha: Optional[str] = None,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Entrar em uma sala existente como membro padrão."""
+    room = db.query(Sala).filter(Sala.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Sala não encontrada.")
+
+    # Se a sala tiver senha e o usuário não for site_admin
+    if room.hash_senha and not user.is_site_admin:
+        if not senha or not verify_password(senha, room.hash_senha):
+            raise HTTPException(status_code=401, detail="Senha da sala incorreta.")
+
+    membro = db.query(MembroSala).filter(
+        MembroSala.sala_id == room_id,
+        MembroSala.usuario_id == user.id
+    ).first()
+
+    if not membro:
+        membro = MembroSala(
+            sala_id=room_id,
+            usuario_id=user.id,
+            role="padrao",
+            is_muted=False
+        )
+        db.add(membro)
+        db.commit()
+        db.refresh(membro)
+
+    return MemberOut(
+        id=membro.id,
+        sala_id=membro.sala_id,
+        usuario_id=membro.usuario_id,
+        role=membro.role,
+        is_muted=membro.is_muted,
+        nickname=user.nickname,
+        created_at=membro.created_at
+    )
+
+
+@router.get("/rooms/{room_id}/subrooms", response_model=List[RoomOut])
+def get_subrooms(
+    room_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Busca recursiva em árvore de canais filhos."""
+    def build_tree(parent_uuid: UUID):
+        subs = db.query(Sala).filter(Sala.parent_id == parent_uuid).all()
+        result = []
+        for s in subs:
+            s_dict = {
+                "id": s.id,
+                "nome_url": s.nome_url,
+                "titulo": s.titulo,
+                "parent_id": s.parent_id,
+                "tipo_sala": s.tipo_sala,
+                "is_permanente": s.is_permanente,
+                "expires_at": s.expires_at,
+                "max_membros": s.max_membros,
+                "created_by": s.created_by,
+                "created_at": s.created_at,
+                "sub_rooms": build_tree(s.id)
+            }
+            result.append(s_dict)
+        return result
+
+    return build_tree(room_id)
+
+
+@router.post("/rooms/{room_id}/subrooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
+def create_subroom(
+    room_id: UUID,
+    req: RoomCreate,
+    auth_data: Tuple = Depends(require_chat_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Criação de sub-canal filho (requer Admin do Chat)."""
+    user, _ = auth_data
+    parent_room = db.query(Sala).filter(Sala.id == room_id).first()
+    if not parent_room:
+        raise HTTPException(status_code=404, detail="Sala pai não encontrada.")
+
+    existing = db.query(Sala).filter(Sala.nome_url == req.nome_url.strip().lower()).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Identificador de URL já em uso.")
+
+    hashed_senha = get_password_hash(req.senha) if req.senha else None
+
+    subroom = Sala(
+        nome_url=req.nome_url.strip().lower(),
+        titulo=req.titulo.strip(),
+        hash_senha=hashed_senha,
+        parent_id=room_id,
+        tipo_sala=parent_room.tipo_sala,
+        is_permanente=parent_room.is_permanente,
+        expires_at=parent_room.expires_at,
+        max_membros=req.max_membros or parent_room.max_membros,
+        created_by=user.id
+    )
+    db.add(subroom)
+    db.commit()
+    db.refresh(subroom)
+
+    # O criador é admin da sub-sala
+    db.add(MembroSala(sala_id=subroom.id, usuario_id=user.id, role="admin"))
+    db.commit()
+
+    return subroom
+
+
+# --- MODERAÇÃO DE CHAT (RBAC LOCAL) ---
+
+@router.post("/rooms/{room_id}/members/{user_id}/mute", response_model=MemberOut)
+def mute_chat_member(
+    room_id: UUID,
+    user_id: UUID,
+    req: MemberMuteUpdate,
+    auth_data: Tuple = Depends(require_chat_role("mod")),
+    db: Session = Depends(get_db)
+):
+    """Mute/unmute local por Moderadores ou Administradores da sala."""
+    membro = db.query(MembroSala).filter(
+        MembroSala.sala_id == room_id,
+        MembroSala.usuario_id == user_id
+    ).first()
+
+    if not membro:
+        raise HTTPException(status_code=404, detail="Membro não encontrado nesta sala.")
+
+    membro.is_muted = req.is_muted
+    db.commit()
+    db.refresh(membro)
+
+    user_info = db.query(Usuario).filter(Usuario.id == user_id).first()
+
+    return MemberOut(
+        id=membro.id,
+        sala_id=membro.sala_id,
+        usuario_id=membro.usuario_id,
+        role=membro.role,
+        is_muted=membro.is_muted,
+        nickname=user_info.nickname if user_info else None,
+        created_at=membro.created_at
+    )
+
+
+@router.post("/rooms/{room_id}/members/{user_id}/ban")
+def ban_chat_member(
+    room_id: UUID,
+    user_id: UUID,
+    auth_data: Tuple = Depends(require_chat_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Banir/remover membro da sala (restrito a Admin do Chat)."""
+    membro = db.query(MembroSala).filter(
+        MembroSala.sala_id == room_id,
+        MembroSala.usuario_id == user_id
+    ).first()
+
+    if not membro:
+        raise HTTPException(status_code=404, detail="Membro não encontrado nesta sala.")
+
+    db.delete(membro)
+    db.commit()
+    return {"message": "Membro banido/removido da sala com sucesso."}
+
+
+# --- MENSAGENS & SSE ---
+
+@router.get("/rooms/{room_id}/messages", response_model=List[MessageOut])
+def get_room_messages(
+    room_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = 500
+):
+    """Leitura de mensagens da sala (usuários view, padrao, mod, admin)."""
+    if not user.is_site_admin:
+        membro = db.query(MembroSala).filter(
+            MembroSala.sala_id == room_id,
+            MembroSala.usuario_id == user.id
+        ).first()
+        if not membro:
+            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
+
     messages = (
         db.query(Mensagem)
-        .filter(Mensagem.sala_id == UUID(sala_id))
+        .filter(Mensagem.sala_id == room_id)
         .order_by(Mensagem.created_at.desc())
         .limit(limit)
         .all()
     )
     messages.reverse()
-
     return messages
 
-@router.post("/messages", response_model=MessageOut)
-async def send_message(
+
+@router.post("/rooms/{room_id}/messages", response_model=MessageOut)
+async def send_room_message(
+    room_id: UUID,
     msg_in: MessageCreate,
-    user: dict = Depends(get_current_user),
+    user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    sala_id = user["sala_id"]
-    autor_nickname = user["nickname"]
+    """
+    Envio de mensagem com validação completa:
+    - Requer cargo mínimo 'padrao' (usuário 'view' é proibido de postar).
+    - Verifica se o usuário está mutado (localmente ou globalmente).
+    - Rate limit de 1 mensagem/segundo.
+    """
+    # 1. Verifica mute global
+    if user.is_muted_global:
+        raise HTTPException(status_code=403, detail="Você está silenciado globalmente na plataforma.")
 
+    # 2. Verifica membro e cargo na sala (se não for site admin)
+    if not user.is_site_admin:
+        membro = db.query(MembroSala).filter(
+            MembroSala.sala_id == room_id,
+            MembroSala.usuario_id == user.id
+        ).first()
+        if not membro:
+            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
+        
+        if membro.is_muted:
+            raise HTTPException(status_code=403, detail="Você está silenciado (mutado) nesta sala.")
+
+        if membro.role == "view":
+            raise HTTPException(status_code=403, detail="Acesso apenas para visualização. Proibido de enviar mensagens.")
+
+    # 3. Rate limit defensivo: 1 msg/segundo por usuário
+    rate_limiter.check_message_rate(str(user.id))
+
+    # 4. Cria e persiste a mensagem
     new_msg = Mensagem(
-        sala_id=UUID(sala_id),
-        autor_nickname=autor_nickname,
+        sala_id=room_id,
+        autor_id=user.id,
+        autor_nickname=user.nickname,
         conteudo=msg_in.conteudo,
-        reply_to_id=msg_in.reply_to_id # 👈 NOVO: Agora salva a resposta
+        reply_to_id=msg_in.reply_to_id,
+        reacoes={}
     )
     db.add(new_msg)
     db.commit()
     db.refresh(new_msg)
 
-    # Broadcast via SSE to room
+    # 5. Broadcast em tempo real via SSE
     msg_dict = {
-        "type": "new_message", # 👈 NOVO: Avisa o React que é uma mensagem
+        "type": "new_message",
+        "id": str(new_msg.id),
+        "sala_id": str(new_msg.sala_id),
+        "autor_id": str(new_msg.autor_id),
+        "autor_nickname": new_msg.autor_nickname,
+        "conteudo": new_msg.conteudo,
+        "created_at": new_msg.created_at.isoformat(),
+        "reply_to_id": str(new_msg.reply_to_id) if new_msg.reply_to_id else None,
+        "reacoes": new_msg.reacoes
+    }
+    await manager.broadcast_to_room(str(room_id), msg_dict)
+
+    return new_msg
+
+
+# Rota legada mantida para compatibilidade direta
+@router.get("/messages", response_model=List[MessageOut])
+def get_messages_legacy(
+    auth: dict = Depends(get_user_or_room_auth),
+    db: Session = Depends(get_db),
+    limit: int = 500
+):
+    sala_id = auth.get("sala_id")
+    if not sala_id:
+        raise HTTPException(status_code=400, detail="sala_id não encontrado no token.")
+    messages = (
+        db.query(Mensagem)
+        .filter(Mensagem.sala_id == UUID(str(sala_id)))
+        .order_by(Mensagem.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    messages.reverse()
+    return messages
+
+
+@router.post("/messages", response_model=MessageOut)
+async def send_message_legacy(
+    msg_in: MessageCreate,
+    auth: dict = Depends(get_user_or_room_auth),
+    db: Session = Depends(get_db)
+):
+    sala_id = auth.get("sala_id")
+    user_id = auth.get("user_id") or auth.get("sub")
+    autor_nickname = auth.get("nickname", "Anônimo")
+
+    if not sala_id:
+        raise HTTPException(status_code=400, detail="sala_id ausente.")
+
+    autor_uuid = None
+    if user_id:
+        try:
+            autor_uuid = UUID(str(user_id))
+            user = db.query(Usuario).filter(Usuario.id == autor_uuid).first()
+            if user and user.is_muted_global:
+                raise HTTPException(status_code=403, detail="Você está mutado globalmente.")
+            membro = db.query(MembroSala).filter(
+                MembroSala.sala_id == UUID(str(sala_id)),
+                MembroSala.usuario_id == autor_uuid
+            ).first()
+            if membro and membro.is_muted:
+                raise HTTPException(status_code=403, detail="Você está mutado nesta sala.")
+            if membro and membro.role == "view":
+                raise HTTPException(status_code=403, detail="Usuário com perfil view não pode enviar mensagens.")
+        except ValueError:
+            pass
+
+    new_msg = Mensagem(
+        sala_id=UUID(str(sala_id)),
+        autor_id=autor_uuid,
+        autor_nickname=autor_nickname,
+        conteudo=msg_in.conteudo,
+        reply_to_id=msg_in.reply_to_id
+    )
+    db.add(new_msg)
+    db.commit()
+    db.refresh(new_msg)
+
+    msg_dict = {
+        "type": "new_message",
         "id": str(new_msg.id),
         "sala_id": str(new_msg.sala_id),
         "autor_nickname": new_msg.autor_nickname,
         "conteudo": new_msg.conteudo,
         "created_at": new_msg.created_at.isoformat(),
-        "reply_to_id": str(new_msg.reply_to_id) if new_msg.reply_to_id else None, # 👈 NOVO
-        "reacoes": new_msg.reacoes # 👈 NOVO
+        "reply_to_id": str(new_msg.reply_to_id) if new_msg.reply_to_id else None,
+        "reacoes": new_msg.reacoes
     }
-    await manager.broadcast_to_room(sala_id, msg_dict)
-
+    await manager.broadcast_to_room(str(sala_id), msg_dict)
     return new_msg
 
-# 👈 NOVO: Rota inteira dedicada para lidar com as reações
+
 @router.post("/messages/{message_id}/react")
 async def react_to_message(
     message_id: UUID,
     reaction: ReactionCreate,
-    user: dict = Depends(get_current_user),
+    auth: dict = Depends(get_user_or_room_auth),
     db: Session = Depends(get_db)
 ):
-    sala_id = user["sala_id"]
-    nickname = user["nickname"]
-
-    # Busca a mensagem no banco
-    msg = db.query(Mensagem).filter(Mensagem.id == message_id, Mensagem.sala_id == UUID(sala_id)).first()
+    nickname = auth.get("nickname", "Usuário")
+    msg = db.query(Mensagem).filter(Mensagem.id == message_id).first()
     if not msg:
-        raise HTTPException(status_code=404, detail="Mensagem não encontrada")
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
 
-    # Pega o dicionário atual de reações (ou cria um vazio)
     reacoes = dict(msg.reacoes) if msg.reacoes else {}
     emoji = reaction.emoji
 
-    # Se o emoji não existe no dict, cria uma lista vazia pra ele
     if emoji not in reacoes:
         reacoes[emoji] = []
     
-    # Toggle da reação (coloca ou tira o nome do usuário)
     if nickname in reacoes[emoji]:
         reacoes[emoji].remove(nickname)
-        if not reacoes[emoji]: # Se a lista ficou vazia, deleta o emoji
+        if not reacoes[emoji]:
             del reacoes[emoji]
     else:
         reacoes[emoji].append(nickname)
 
-    # Salva no banco de dados
     msg.reacoes = reacoes
     db.commit()
     db.refresh(msg)
 
-    # Avisa todo mundo da sala que a reação mudou via SSE!
     event_data = {
         "type": "reaction_update",
         "message_id": str(msg.id),
         "reacoes": msg.reacoes
     }
-    await manager.broadcast_to_room(sala_id, event_data)
-
+    await manager.broadcast_to_room(str(msg.sala_id), event_data)
     return msg
 
+
 @router.get("/stream")
-async def chat_stream(request: Request, token: str):
+async def chat_stream(request: Request, token: str, room_id: Optional[str] = None):
     payload = decode_access_token(token)
-    if not payload or "sala_id" not in payload:
+    if not payload:
         raise HTTPException(status_code=401, detail="Token inválido.")
     
-    sala_id = payload["sala_id"]
-    queue = await manager.connect(sala_id)
+    sala_id = room_id or payload.get("sala_id")
+    if not sala_id:
+        raise HTTPException(status_code=400, detail="sala_id não informado.")
+
+    queue = await manager.connect(str(sala_id))
 
     async def event_generator():
         try:
@@ -147,10 +529,9 @@ async def chat_stream(request: Request, token: str):
                     data = await asyncio.wait_for(queue.get(), timeout=15.0)
                     yield f"data: {data}\n\n"
                 except asyncio.TimeoutError:
-                    # Keep-alive heartbeat comment
                     yield ": keep-alive\n\n"
         finally:
-            manager.disconnect(sala_id, queue)
+            manager.disconnect(str(sala_id), queue)
 
     return StreamingResponse(
         event_generator(),
@@ -162,37 +543,51 @@ async def chat_stream(request: Request, token: str):
         }
     )
 
+
 @router.post("/upload")
 async def upload_image(
     file: UploadFile = File(...),
-    user: dict = Depends(get_current_user)
+    auth: dict = Depends(get_user_or_room_auth)
 ):
-    # Validamos o formato
-    if file.content_type not in ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]:
-        raise HTTPException(status_code=400, detail="Formato de arquivo não suportado.")
-
-    # Lemos o arquivo e validamos o tamanho (< 2MB)
     contents = await file.read()
-    if len(contents) > 2 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Arquivo excede o limite de tamanho.")
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Arquivo excede o limite máximo permitido de 5MB.")
 
-    # Pegamos a chave do ImgBB no .env
-    api_key = os.getenv("IMGBB_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="API Key do ImgBB não configurada")
+    # Validação rigorosa por Magic Bytes reais e sanitização EXIF
+    sanitized_bytes, real_mime, extension = validate_and_sanitize_image(contents, file.filename or "upload.jpg")
 
-    # Enviamos para o ImgBB via POST
-    url_imgbb = "https://api.imgbb.com/1/upload"
-    payload = {"key": api_key}
-    files = {"image": (file.filename, contents, file.content_type)}
-    
-    response = requests.post(url_imgbb, data=payload, files=files)
-    
-    # Se der certo, devolvemos a URL pro frontend
-    if response.status_code == 200:
-        data = response.json()
-        link_direto = data["data"]["url"]
-        return {"url": link_direto}
-    else:
-        print("Erro ImgBB:", response.text)
-        raise HTTPException(status_code=500, detail="Erro ao salvar a imagem no servidor externo.")
+    # Tentativa de upload para Cloudflare R2
+    try:
+        url = await upload_image_to_r2(sanitized_bytes, file.filename or f"img.{extension}", real_mime)
+        return {"url": url}
+    except Exception as e:
+        # Fallback para ImgBB se R2 não estiver configurado
+        api_key = os.getenv("IMGBB_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail=f"Storage indisponível: {e}")
+
+        url_imgbb = "https://api.imgbb.com/1/upload"
+        payload = {"key": api_key}
+        files = {"image": (file.filename, sanitized_bytes, real_mime)}
+        resp = requests.post(url_imgbb, data=payload, files=files)
+        if resp.status_code == 200:
+            return {"url": resp.json()["data"]["url"]}
+        raise HTTPException(status_code=500, detail="Erro no upload de mídia.")
+
+
+@router.post("/reports", status_code=status.HTTP_201_CREATED)
+def create_report(
+    req: ReportCreate,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    report = Denuncia(
+        denunciante_id=user.id,
+        mensagem_id=req.mensagem_id,
+        sala_id=req.sala_id,
+        motivo=req.motivo.strip()
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return {"message": "Denúncia registrada com sucesso.", "id": str(report.id)}

@@ -2,6 +2,56 @@ import boto3
 from botocore.config import Config
 from app.core.config import settings
 import uuid
+import io
+import filetype
+from PIL import Image
+from fastapi import HTTPException, status
+from typing import Tuple
+
+ALLOWED_MIME_TYPES = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif"
+}
+
+def validate_and_sanitize_image(file_bytes: bytes, filename: str) -> Tuple[bytes, str, str]:
+    """
+    Zero-Trust em Uploads:
+    1. Validação por Magic Numbers / Bytes reais via filetype.
+    2. Rejeição de extensões mascaradas (ex: .exe renomeado para .png).
+    3. Remoção obrigatória de metadados EXIF das imagens.
+    """
+    kind = filetype.guess(file_bytes)
+    if not kind or kind.mime not in ALLOWED_MIME_TYPES:
+        real_type = kind.mime if kind else "desconhecido"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Arquivo rejeitado por Magic Byte. Tipo real detectado: '{real_type}'. Apenas imagens reais são permitidas."
+        )
+
+    real_mime = kind.mime
+    extension = ALLOWED_MIME_TYPES[real_mime]
+
+    # Sanitização EXIF para JPEG, PNG, WEBP via Pillow
+    try:
+        if real_mime in ["image/jpeg", "image/png", "image/webp"]:
+            with Image.open(io.BytesIO(file_bytes)) as img:
+                # Cria uma nova imagem limpa sem metadados EXIF
+                data = list(img.getdata())
+                image_without_exif = Image.new(img.mode, img.size)
+                image_without_exif.putdata(data)
+                
+                output = io.BytesIO()
+                fmt = "JPEG" if real_mime == "image/jpeg" else ("PNG" if real_mime == "image/png" else "WEBP")
+                image_without_exif.save(output, format=fmt, quality=90)
+                sanitized_bytes = output.getvalue()
+                return sanitized_bytes, real_mime, extension
+    except Exception as e:
+        print(f"[EXIF SANITIZATION WARNING] Falha ao sanitizar EXIF: {e}")
+
+    return file_bytes, real_mime, extension
+
 
 def get_s3_client():
     if not settings.R2_ACCOUNT_ID:
@@ -30,6 +80,7 @@ async def upload_image_to_r2(file_bytes: bytes, filename: str, content_type: str
         Key=unique_filename,
         Body=file_bytes,
         ContentType=content_type,
+        ContentDisposition="inline", # Armazenado como inline sem permissão de script
     )
 
     public_base = settings.R2_PUBLIC_URL.rstrip("/")

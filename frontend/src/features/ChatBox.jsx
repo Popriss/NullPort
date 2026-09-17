@@ -1,24 +1,76 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { fetchMessages, sendMessage, uploadImage, subscribeToMessages, reactToMessage } from '../services/chat';
+import {
+  fetchRoomMessages,
+  sendRoomMessage,
+  fetchMessages,
+  sendMessage,
+  uploadImage,
+  subscribeToMessages,
+  reactToMessage,
+  muteMember,
+  banMember
+} from '../services/chat';
 import { compressImage } from '../utils/compression';
 import { isImageUrl } from '../utils/regex';
 import Button from '../components/Button';
+import ModerationDrawer from './ModerationDrawer';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
 
 const EMOJIS_DISPONIVEIS = ['👍', '❤️', '😂', '🔥', '🚀'];
 
-export default function ChatBox({ user, onLogout }) {
+export default function ChatBox({
+  user,
+  activeRoom,
+  onLogout,
+  onToggleSidebar,
+  roomMembers = []
+}) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [replyingTo, setReplyingTo] = useState(null); // Guarda a mensagem sendo respondida
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [imagemAmpliada, setImagemAmpliada] = useState(null);
+  const [isModDrawerOpen, setIsModDrawerOpen] = useState(false);
+  const [members, setMembers] = useState(roomMembers);
+  const [userRole, setUserRole] = useState('padrao');
+  const [isUserMuted, setIsUserMuted] = useState(false);
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
-  const [imagemAmpliada, setImagemAmpliada] = useState(null);
 
-  // Solicitar permissão de notificação push
+  const roomId = activeRoom?.id || user?.sala_id;
+  const roomTitle = activeRoom?.titulo || activeRoom?.nome_url || user?.nome_url || 'Chat';
+
+  // Sincroniza membros e permissões do usuário logado na sala ativa
+  useEffect(() => {
+    if (user?.is_site_admin) {
+      setUserRole('admin');
+      setIsUserMuted(false);
+      return;
+    }
+
+    if (user?.is_muted_global) {
+      setIsUserMuted(true);
+    }
+
+    const currentMember = roomMembers.find(
+      (m) => m.usuario_id === user?.id || m.nickname === user?.nickname
+    );
+
+    if (currentMember) {
+      setUserRole(currentMember.role || 'padrao');
+      setIsUserMuted(currentMember.is_muted || user?.is_muted_global || false);
+    } else {
+      setUserRole(user?.role || 'padrao');
+      setIsUserMuted(user?.is_muted || false);
+    }
+    setMembers(roomMembers);
+  }, [roomMembers, user, activeRoom]);
+
+  // Solicita permissão de notificação push
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
@@ -27,21 +79,32 @@ export default function ChatBox({ user, onLogout }) {
 
   const notifyNewMessage = (msg) => {
     if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-      new Notification(`Nova mensagem de ${msg.autor_nickname}`, {
-        body: msg.conteudo.slice(0, 100),
+      new Notification(`Nova mensagem em #${roomTitle}`, {
+        body: `${msg.autor_nickname}: ${msg.conteudo.slice(0, 80)}`,
         icon: '/favicon.ico',
       });
     }
   };
 
-  // Carregar histórico e assinar SSE (tratando novas mensagens e reações)
+  // Carrega mensagens e conecta ao stream SSE da sala
   useEffect(() => {
-    fetchMessages()
-      .then((data) => setMessages(data))
-      .catch((err) => console.error("Erro ao carregar mensagens:", err));
+    if (!roomId) return;
+
+    const loadMessages = async () => {
+      try {
+        const data = activeRoom?.id
+          ? await fetchRoomMessages(roomId)
+          : await fetchMessages();
+        setMessages(data);
+      } catch (err) {
+        console.error("Erro ao carregar mensagens:", err);
+      }
+    };
+
+    loadMessages();
 
     const unsubscribe = subscribeToMessages((eventData) => {
-      // Se for uma atualização de reação
+      // Atualização de reações
       if (eventData.type === "reaction_update") {
         setMessages((prev) =>
           prev.map((m) =>
@@ -51,57 +114,69 @@ export default function ChatBox({ user, onLogout }) {
         return;
       }
 
-      // Se for uma mensagem nova
+      // Mensagem nova
       const newMessage = eventData;
       setMessages((prev) => {
         if (prev.some((m) => m.id === newMessage.id)) return prev;
         return [...prev, newMessage];
       });
       notifyNewMessage(newMessage);
-    });
+    }, roomId);
 
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, []);
+  }, [roomId, activeRoom]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Envio de mensagem
   const handleSend = async (e) => {
     e.preventDefault();
-    if (!input.trim() || sending) return;
+    if (!input.trim() || sending || isUserMuted || userRole === 'view') return;
 
     const textToSend = input.trim();
     const replyId = replyingTo ? replyingTo.id : null;
-    
+
     setInput('');
-    setReplyingTo(null); // Limpa o modo resposta
+    setReplyingTo(null);
 
     try {
       setSending(true);
-      await sendMessage(textToSend, replyId);
+      if (activeRoom?.id) {
+        await sendRoomMessage(activeRoom.id, textToSend, replyId);
+      } else {
+        await sendMessage(textToSend, replyId);
+      }
     } catch (err) {
       console.error("Erro ao enviar mensagem:", err);
+      alert(err.message || "Falha ao enviar mensagem.");
       setInput(textToSend);
     } finally {
       setSending(false);
     }
   };
 
+  // Upload com compressão client-side
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || isUserMuted || userRole === 'view') return;
 
     try {
       setUploading(true);
       const compressed = await compressImage(file);
       const { url } = await uploadImage(compressed);
-      await sendMessage(url, replyingTo ? replyingTo.id : null);
+      if (activeRoom?.id) {
+        await sendRoomMessage(activeRoom.id, url, replyingTo ? replyingTo.id : null);
+      } else {
+        await sendMessage(url, replyingTo ? replyingTo.id : null);
+      }
       setReplyingTo(null);
     } catch (err) {
       console.error("Erro no upload de imagem:", err);
+      alert(err.message || "Erro no upload.");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -115,11 +190,6 @@ export default function ChatBox({ user, onLogout }) {
     }
   };
 
-  const copiarTexto = (texto) => {
-    navigator.clipboard.writeText(texto);
-    alert("Mensagem copiada!");
-  };
-
   const handleReaction = async (messageId, emoji) => {
     try {
       await reactToMessage(messageId, emoji);
@@ -128,157 +198,284 @@ export default function ChatBox({ user, onLogout }) {
     }
   };
 
-  // Função auxiliar para achar a mensagem original que está sendo respondida
-  const encontrarMensagemOriginal = (replyId) => {
-    return messages.find((m) => m.id === replyId);
+  const copiarTexto = (texto) => {
+    navigator.clipboard.writeText(texto);
+    alert("Mensagem copiada para a área de transferência!");
   };
 
+  const handleMuteAction = async (targetUserId, shouldMute) => {
+    if (!activeRoom?.id) return;
+    try {
+      await muteMember(activeRoom.id, targetUserId, shouldMute);
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.usuario_id === targetUserId ? { ...m, is_muted: shouldMute } : m
+        )
+      );
+      if (targetUserId === user?.id) {
+        setIsUserMuted(shouldMute);
+      }
+    } catch (err) {
+      alert(err.message || "Erro ao atualizar mute.");
+    }
+  };
+
+  const handleBanAction = async (targetUserId) => {
+    if (!activeRoom?.id) return;
+    if (!window.confirm("Deseja realmente banir este membro da sala?")) return;
+    try {
+      await banMember(activeRoom.id, targetUserId);
+      setMembers((prev) => prev.filter((m) => m.usuario_id !== targetUserId));
+    } catch (err) {
+      alert(err.message || "Erro ao banir membro.");
+    }
+  };
+
+  const isCanModerate = userRole === 'admin' || userRole === 'mod' || user?.is_site_admin;
+  const isInputDisabled = isUserMuted || userRole === 'view' || sending;
+
   return (
-    <div className="flex flex-col h-[85vh] w-full max-w-4xl mx-auto bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/60 backdrop-blur-md">
+    <div className="flex flex-col h-[88vh] w-full max-w-5xl mx-auto bg-zinc-900/90 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md">
+      {/* Header do Chat */}
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md">
         <div className="flex items-center gap-3">
+          {onToggleSidebar && (
+            <button
+              onClick={onToggleSidebar}
+              className="md:hidden p-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:text-white"
+              title="Abrir lista de canais"
+            >
+              ☰
+            </button>
+          )}
+
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+
           <div>
-            <h2 className="text-sm font-bold text-zinc-100">#{user?.nome_url}</h2>
-            <p className="text-xs text-zinc-500">Conectado como <span className="text-emerald-400 font-medium">{user?.nickname}</span></p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-zinc-100">#{roomTitle}</h2>
+              {activeRoom?.tipo_sala === 'temporaria' && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                  Efêmera (TTL)
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-zinc-400 flex items-center gap-1.5">
+              <span>Conectado como</span>
+              <span className="text-emerald-400 font-semibold">{user?.nickname}</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-zinc-800 text-zinc-300 uppercase">
+                {userRole}
+              </span>
+            </p>
           </div>
         </div>
-        <Button variant="secondary" onClick={onLogout} className="text-xs py-1.5 px-3">
-          Sair
-        </Button>
+
+        <div className="flex items-center gap-2">
+          {isCanModerate && (
+            <button
+              onClick={() => setIsModDrawerOpen(true)}
+              className="text-xs font-semibold py-1.5 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 transition-all flex items-center gap-1.5"
+            >
+              <span>🛡️</span>
+              <span className="hidden sm:inline">Moderação</span>
+            </button>
+          )}
+
+          <Button variant="secondary" onClick={onLogout} className="text-xs py-1.5 px-3">
+            Sair
+          </Button>
+        </div>
       </div>
 
-      {/* Message List */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {messages.map((msg) => {
-          const isMe = msg.autor_nickname === user?.nickname;
-          const isImage = isImageUrl(msg.conteudo.trim());
-          const mensagemOriginal = msg.reply_to_id ? encontrarMensagemOriginal(msg.reply_to_id) : null;
+      {/* Lista de Mensagens */}
+      <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
+        {messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-xs py-12">
+            <span className="text-3xl mb-2">💬</span>
+            <p>Nenhuma mensagem ainda neste canal.</p>
+            <p className="text-zinc-600">Seja o primeiro a iniciar a conversa!</p>
+          </div>
+        ) : (
+          messages.map((msg) => {
+            const isMe = msg.autor_nickname === user?.nickname;
+            const isImage = isImageUrl(msg.conteudo.trim());
+            const mensagemOriginal = msg.reply_to_id
+              ? messages.find((m) => m.id === msg.reply_to_id)
+              : null;
 
-          return (
-            <div key={msg.id} className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'}`}>
-              <span className="text-[11px] font-medium text-zinc-500 mb-1 px-1">
-                {msg.autor_nickname} • {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-
-              {/* Balão da Mensagem */}
+            return (
               <div
-                className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm relative ${
-                  isMe
-                    ? 'bg-emerald-600 text-white rounded-br-xs'
-                    : 'bg-zinc-800 text-zinc-100 rounded-bl-xs border border-zinc-700/60'
-                }`}
+                key={msg.id}
+                className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'}`}
               >
-                {/* Se for uma resposta, exibe a prévia da mensagem citada */}
-                {mensagemOriginal && (
-                  <div className="mb-2 p-2 rounded bg-black/20 border-l-2 border-emerald-400 text-xs text-zinc-300">
-                    <span className="font-semibold block text-emerald-300">{mensagemOriginal.autor_nickname}</span>
-                    <p className="truncate">{mensagemOriginal.conteudo}</p>
-                  </div>
-                )}
-
-                {isImage ? (
-                  <img
-                    src={msg.conteudo.trim()}
-                    alt="Anexo de mídia"
-                    className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-zoom-in"
-                    onClick={() => setImagemAmpliada(msg.conteudo.trim())}
-                  />
-                ) : (
-                  <div className="text-sm break-words whitespace-pre-wrap">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        img: ({ node, ...props }) => (
-                          <img
-                            {...props}
-                            className="max-w-sm rounded-lg my-2 shadow-md cursor-zoom-in hover:opacity-90 transition-opacity"
-                            loading="lazy"
-                            onClick={() => setImagemAmpliada(props.src)}
-                          />
-                        ),
-                        p: ({ node, ...props }) => <p className="mb-1 last:mb-0" {...props} />,
-                        a: ({ node, ...props }) => <a className="text-emerald-300 hover:underline font-medium" target="_blank" rel="noopener noreferrer" {...props} />,
-                        code: ({ node, inline, ...props }) => 
-                          inline ? (
-                            <code className="bg-black/30 px-1.5 py-0.5 rounded text-emerald-300 font-mono text-[13px]" {...props} />
-                          ) : (
-                            <pre className="bg-black/40 p-3 rounded-md overflow-x-auto my-2 border border-zinc-700/50"><code className="font-mono text-[13px] text-zinc-200" {...props} /></pre>
-                          )
-                      }}
-                    >
-                      {msg.conteudo}
-                    </ReactMarkdown>
-                  </div>
-                )}
-
-                {/* Exibição das Reações em baixo do balão */}
-                {msg.reacoes && Object.keys(msg.reacoes).length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {Object.entries(msg.reacoes).map(([emoji, usuarios]) => {
-                      const usuarioReagiu = usuarios.includes(user?.nickname);
-                      return (
-                        <button
-                          key={emoji}
-                          onClick={() => handleReaction(msg.id, emoji)}
-                          title={usuarios.join(', ')}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
-                            usuarioReagiu 
-                              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200' 
-                              : 'bg-zinc-900/60 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
-                          }`}
-                        >
-                          <span>{emoji}</span>
-                          <span className="font-bold">{usuarios.length}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Barra de Ações Rápidas Flutuantes (Hover) */}
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2 mt-1 text-[11px] text-zinc-400 px-1">
-                {/* Emojis Rápidos */}
-                <div className="flex items-center gap-1 bg-zinc-950 border border-zinc-800 rounded-full px-2 py-0.5 shadow-md">
-                  {EMOJIS_DISPONIVEIS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      onClick={() => handleReaction(msg.id, emoji)}
-                      className="hover:scale-125 transition-transform cursor-pointer"
-                      title={`Reagir com ${emoji}`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
+                {/* Nome do autor com Badges de cargo */}
+                <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-zinc-400">
+                  <span>{msg.autor_nickname}</span>
+                  {/* Badge de Cargo se admin ou mod */}
+                  {members.find((m) => m.nickname === msg.autor_nickname)?.role === 'admin' && (
+                    <span className="text-[9px] px-1 py-0.2 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      ADMIN
+                    </span>
+                  )}
+                  {members.find((m) => m.nickname === msg.autor_nickname)?.role === 'mod' && (
+                    <span className="text-[9px] px-1 py-0.2 rounded-full font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                      MOD
+                    </span>
+                  )}
+                  <span className="text-[10px] text-zinc-500">
+                    • {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
                 </div>
 
-                {/* Botão de Responder */}
-                <button
-                  onClick={() => setReplyingTo(msg)}
-                  className="hover:text-emerald-400 transition-colors cursor-pointer bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 shadow-md"
+                {/* Balão da Mensagem */}
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm relative shadow-md ${
+                    isMe
+                      ? 'bg-emerald-600 text-white rounded-br-xs'
+                      : 'bg-zinc-800 text-zinc-100 rounded-bl-xs border border-zinc-700/60'
+                  }`}
                 >
-                  Responder
-                </button>
+                  {/* Citação / Resposta */}
+                  {mensagemOriginal && (
+                    <div className="mb-2 p-2 rounded bg-black/25 border-l-2 border-emerald-400 text-xs text-zinc-300">
+                      <span className="font-semibold block text-emerald-300">
+                        {mensagemOriginal.autor_nickname}
+                      </span>
+                      <p className="truncate">{mensagemOriginal.conteudo}</p>
+                    </div>
+                  )}
 
-                {/* Botão de Copiar */}
-                <button 
-                  onClick={() => copiarTexto(msg.conteudo)}
-                  className="hover:text-emerald-400 transition-colors cursor-pointer bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 shadow-md"
-                >
-                  Copiar
-                </button>
+                  {isImage ? (
+                    <img
+                      src={msg.conteudo.trim()}
+                      alt="Anexo de mídia"
+                      className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-zoom-in"
+                      onClick={() => setImagemAmpliada(msg.conteudo.trim())}
+                    />
+                  ) : (
+                    <div className="text-sm break-words whitespace-pre-wrap">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeSanitize]}
+                        components={{
+                          img: ({ node, ...props }) => (
+                            <img
+                              {...props}
+                              className="max-w-sm rounded-lg my-2 shadow-md cursor-zoom-in hover:opacity-90 transition-opacity"
+                              loading="lazy"
+                              onClick={() => setImagemAmpliada(props.src)}
+                            />
+                          ),
+                          p: ({ node, ...props }) => <p className="mb-1 last:mb-0" {...props} />,
+                          a: ({ node, ...props }) => (
+                            <a
+                              className="text-emerald-300 hover:underline font-medium"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              {...props}
+                            />
+                          ),
+                          code: ({ node, inline, ...props }) =>
+                            inline ? (
+                              <code className="bg-black/30 px-1.5 py-0.5 rounded text-emerald-300 font-mono text-[13px]" {...props} />
+                            ) : (
+                              <pre className="bg-black/40 p-3 rounded-md overflow-x-auto my-2 border border-zinc-700/50">
+                                <code className="font-mono text-[13px] text-zinc-200" {...props} />
+                              </pre>
+                            ),
+                        }}
+                      >
+                        {msg.conteudo}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+
+                  {/* Reações com Emojis */}
+                  {msg.reacoes && Object.keys(msg.reacoes).length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {Object.entries(msg.reacoes).map(([emoji, usuarios]) => {
+                        const usuarioReagiu = usuarios.includes(user?.nickname);
+                        return (
+                          <button
+                            key={emoji}
+                            onClick={() => handleReaction(msg.id, emoji)}
+                            title={usuarios.join(', ')}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                              usuarioReagiu
+                                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
+                                : 'bg-zinc-900/60 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                            }`}
+                          >
+                            <span>{emoji}</span>
+                            <span className="font-bold text-[10px]">{usuarios.length}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Barra Flutuante de Ações Rápidas */}
+                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2 mt-1 text-[11px] text-zinc-400 px-1">
+                  {/* Reações Rápidas (View users PODEM reagir!) */}
+                  <div className="flex items-center gap-1 bg-zinc-950 border border-zinc-800 rounded-full px-2 py-0.5 shadow-md">
+                    {EMOJIS_DISPONIVEIS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        onClick={() => handleReaction(msg.id, emoji)}
+                        className="hover:scale-125 transition-transform cursor-pointer"
+                        title={`Reagir com ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Responder (desabilitado se View ou Muted) */}
+                  {!isUserMuted && userRole !== 'view' && (
+                    <button
+                      onClick={() => setReplyingTo(msg)}
+                      className="hover:text-emerald-400 transition-colors cursor-pointer bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 shadow-md"
+                    >
+                      Responder
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => copiarTexto(msg.conteudo)}
+                    className="hover:text-emerald-400 transition-colors cursor-pointer bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 shadow-md"
+                  >
+                    Copiar
+                  </button>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input bar & Preview de Resposta */}
-      <div className="flex flex-col border-t border-zinc-800 bg-zinc-950/60">
-        {/* Banner de "Respondendo a..." */}
+      {/* Banners Condicionais de Permissão */}
+      {userRole === 'view' && (
+        <div className="px-4 py-2 bg-amber-500/10 border-t border-amber-500/20 text-amber-300 text-xs flex items-center gap-2">
+          <span>👁️</span>
+          <span>
+            <strong>Modo Somente Leitura:</strong> você possui cargo <em>View</em>. Pode acompanhar conversas e reagir com emojis, mas não pode enviar mensagens ou anexos.
+          </span>
+        </div>
+      )}
+
+      {isUserMuted && (
+        <div className="px-4 py-2 bg-rose-500/10 border-t border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+          <span>🔇</span>
+          <span>
+            <strong>Silenciado:</strong> Você está mutado nesta sala e impedido de postar. Fale com um moderador da sala.
+          </span>
+        </div>
+      )}
+
+      {/* Área de Input */}
+      <div className="flex flex-col border-t border-zinc-800 bg-zinc-950/70">
         {replyingTo && (
           <div className="flex items-center justify-between px-4 py-2 bg-zinc-900/90 border-b border-zinc-800 text-xs text-zinc-300">
             <div className="flex items-center gap-2 truncate">
@@ -294,20 +491,21 @@ export default function ChatBox({ user, onLogout }) {
           </div>
         )}
 
-        <form onSubmit={handleSend} className="p-4 flex items-center gap-3">
+        <form onSubmit={handleSend} className="p-3.5 flex items-center gap-3">
           <input
             type="file"
             ref={fileInputRef}
             onChange={handleImageUpload}
             accept="image/*"
             className="hidden"
+            disabled={isInputDisabled}
           />
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50 cursor-pointer"
-            title="Enviar Imagem"
+            disabled={isInputDisabled || uploading}
+            className="p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            title={isInputDisabled ? "Envio desativado para seu cargo" : "Enviar Imagem (Comprimida client-side)"}
           >
             {uploading ? '⏳' : '📷'}
           </button>
@@ -316,35 +514,57 @@ export default function ChatBox({ user, onLogout }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={replyingTo ? "Digite sua resposta..." : "Digite sua mensagem..."}
-            className="flex-1 px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[44px] max-h-32 overflow-y-auto"
+            disabled={isInputDisabled}
+            placeholder={
+              isUserMuted
+                ? "Você está silenciado nesta sala."
+                : userRole === 'view'
+                ? "Modo apenas visualização (View)."
+                : replyingTo
+                ? "Digite sua resposta..."
+                : "Digite sua mensagem... (Markdown suportado)"
+            }
+            className="flex-1 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[42px] max-h-28 overflow-y-auto disabled:opacity-40 disabled:cursor-not-allowed"
             rows="1"
           />
 
-          <Button type="submit" disabled={sending || !input.trim()}>
+          <Button
+            type="submit"
+            disabled={isInputDisabled || !input.trim()}
+            className="disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             {sending ? '...' : 'Enviar'}
           </Button>
         </form>
       </div>
 
-      {/* Modal de Imagem Ampliada */}
+      {/* Drawer de Moderação */}
+      <ModerationDrawer
+        isOpen={isModDrawerOpen}
+        onClose={() => setIsModDrawerOpen(false)}
+        activeRoom={activeRoom}
+        members={members}
+        currentUserRole={userRole}
+        onMuteMember={handleMuteAction}
+        onBanMember={handleBanAction}
+      />
+
+      {/* Lightbox / Imagem Ampliada */}
       {imagemAmpliada && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 cursor-zoom-out transition-all"
-          onClick={() => setImagemAmpliada(null)} 
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 cursor-zoom-out"
+          onClick={() => setImagemAmpliada(null)}
         >
           <div className="relative max-w-5xl max-h-[90vh]">
             <img
               src={imagemAmpliada}
               alt="Ampliada"
               className="w-auto h-auto max-w-full max-h-[90vh] rounded-lg shadow-2xl cursor-default"
-              onClick={(e) => e.stopPropagation()} 
+              onClick={(e) => e.stopPropagation()}
             />
             <button
-              click={() => setImagemAmpliada(null)}
               onClick={() => setImagemAmpliada(null)}
-              className="absolute -top-4 -right-4 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg transition-colors cursor-pointer"
-              title="Fechar"
+              className="absolute -top-3 -right-3 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg transition-colors cursor-pointer"
             >
               ✕
             </button>

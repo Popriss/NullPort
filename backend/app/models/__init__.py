@@ -1,3 +1,3 @@
-from .models import Sala, Mensagem
+from .models import Usuario, Sala, MembroSala, Mensagem, Denuncia
 
-__all__ = ["Sala", "Mensagem"]
+__all__ = ["Usuario", "Sala", "MembroSala", "Mensagem", "Denuncia"]
