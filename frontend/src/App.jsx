@@ -28,23 +28,14 @@ export default function App() {
     initSession();
   }, []);
 
-  // Carrega salas quando o usuário estiver logado
+  // Carrega salas quando o usuário estiver logado (Zero-Discovery: apenas salas onde o usuário é membro ativo)
   const loadRooms = async () => {
     try {
-      let roomsData;
-      try {
-        roomsData = await fetchRooms();
-      } catch {
-        // Fallback para token legado/guest que não passa por get_current_user
-        roomsData = await fetchMyRooms();
-      }
+      const roomsData = await fetchMyRooms();
       setRooms(roomsData);
-      // Se não tiver sala ativa selecionada, seleciona a primeira que é membro ou pública sem senha
+      // Se não tiver sala ativa selecionada, seleciona a primeira sala disponível
       if (roomsData.length > 0 && !activeRoom) {
-        const defaultRoom = roomsData.find((r) => r.is_membro) || roomsData.find((r) => !r.tem_senha) || null;
-        if (defaultRoom) {
-          setActiveRoom(defaultRoom);
-        }
+        setActiveRoom(roomsData[0]);
       }
     } catch (err) {
       console.error("Erro ao carregar salas:", err);
@@ -87,6 +78,17 @@ export default function App() {
     setActiveRoom(newSub);
   };
 
+  const handleJoinRoom = (joinedRoom) => {
+    setRooms((prev) => {
+      const exists = prev.some((r) => r.id === joinedRoom.id);
+      if (exists) {
+        return prev.map((r) => (r.id === joinedRoom.id ? { ...joinedRoom, is_membro: true } : r));
+      }
+      return [joinedRoom, ...prev];
+    });
+    setActiveRoom(joinedRoom);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#050a08] text-zinc-400 text-xs">
@@ -122,6 +124,7 @@ export default function App() {
           }}
           onCreateRoom={handleCreateRoom}
           onCreateSubroom={handleCreateSubroom}
+          onJoinRoom={handleJoinRoom}
           user={user}
           isOpen={isSidebarOpen}
           onClose={() => setIsSidebarOpen(false)}

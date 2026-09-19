@@ -15,6 +15,10 @@ class RoomCreate(BaseModel):
 class RoomJoinRequest(BaseModel):
     senha: Optional[str] = None
 
+class RoomJoinByUrlRequest(BaseModel):
+    nome_url: str
+    senha: Optional[str] = None
+
 class RoomOut(BaseModel):
     id: UUID
     nome_url: str

@@ -85,6 +85,23 @@ export async function joinRoom(roomId, senha = null) {
   return response.json();
 }
 
+export async function joinRoomByUrl(nomeUrl, senha = null) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/rooms/join-by-url`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ nome_url: nomeUrl, senha: senha || null })
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao acessar a sala");
+  }
+  return response.json();
+}
+
 // --- Moderação ---
 
 export async function muteMember(roomId, userId, isMuted) {

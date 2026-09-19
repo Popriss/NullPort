@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { joinRoom } from '../services/chat';
+import { joinRoom, joinRoomByUrl } from '../services/chat';
 
 export default function RoomTreeSidebar({
   rooms,
@@ -7,6 +7,7 @@ export default function RoomTreeSidebar({
   onSelectRoom,
   onCreateRoom,
   onCreateSubroom,
+  onJoinRoom,
   user,
   isOpen,
   onClose
@@ -14,12 +15,19 @@ export default function RoomTreeSidebar({
   const [expandedRooms, setExpandedRooms] = useState({});
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [modalParentId, setModalParentId] = useState(null);
+  const [modalMode, setModalMode] = useState('create'); // 'create' | 'join'
   
+  // Estados para criação
   const [formNomeUrl, setFormNomeUrl] = useState('');
   const [formTitulo, setFormTitulo] = useState('');
   const [formSenha, setFormSenha] = useState('');
   const [formTipo, setFormTipo] = useState('temporaria');
   const [formTtl, setFormTtl] = useState(1440); // 24h em minutos
+
+  // Estados para entrar em sala existente por URL/Senha
+  const [joinNomeUrl, setJoinNomeUrl] = useState('');
+  const [joinSenha, setJoinSenha] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,9 +44,12 @@ export default function RoomTreeSidebar({
 
   const openCreateDialog = (parentId = null) => {
     setModalParentId(parentId);
+    setModalMode('create');
     setFormNomeUrl('');
     setFormTitulo('');
     setFormSenha('');
+    setJoinNomeUrl('');
+    setJoinSenha('');
     setFormTipo(user?.is_site_admin ? 'permanente' : 'temporaria');
     setError('');
     setShowCreateModal(true);
@@ -73,6 +84,31 @@ export default function RoomTreeSidebar({
     }
   };
 
+  const handleJoinExisting = async (e) => {
+    e.preventDefault();
+    setError('');
+    const cleanUrl = joinNomeUrl.trim().toLowerCase().replace(/^#/, '');
+    if (!cleanUrl) {
+      setError('Informe o identificador da sala.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const room = await joinRoomByUrl(cleanUrl, joinSenha ? joinSenha.trim() : null);
+      if (onJoinRoom) {
+        onJoinRoom(room);
+      } else {
+        onSelectRoom(room);
+      }
+      setShowCreateModal(false);
+    } catch (err) {
+      setError(err.message || 'Erro ao acessar a sala. Verifique o identificador e a senha.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRoomClick = async (room) => {
     // Se o usuário já for membro da sala ou for site admin:
     if (room.is_membro || user?.is_site_admin) {
@@ -92,7 +128,11 @@ export default function RoomTreeSidebar({
     try {
       await joinRoom(room.id);
       room.is_membro = true;
-      onSelectRoom({ ...room, is_membro: true });
+      if (onJoinRoom) {
+        onJoinRoom(room);
+      } else {
+        onSelectRoom({ ...room, is_membro: true });
+      }
     } catch (err) {
       console.error("Erro ao entrar na sala pública:", err);
       setPasswordModalRoom(room);
@@ -117,7 +157,11 @@ export default function RoomTreeSidebar({
       const joinedRoom = { ...passwordModalRoom, is_membro: true };
       setPasswordModalRoom(null);
       setRoomPassword('');
-      onSelectRoom(joinedRoom);
+      if (onJoinRoom) {
+        onJoinRoom(joinedRoom);
+      } else {
+        onSelectRoom(joinedRoom);
+      }
     } catch (err) {
       setPasswordError(err.message || 'Senha incorreta ou erro ao entrar na sala.');
     } finally {
@@ -125,12 +169,17 @@ export default function RoomTreeSidebar({
     }
   };
 
+  // Zero-Discovery: usuário comum vê apenas salas das quais é membro
+  const visibleRooms = user?.is_site_admin
+    ? rooms
+    : rooms.filter((r) => r.is_membro);
+
   // Separa as salas raiz (sem parent_id)
-  const rootRooms = rooms.filter((r) => !r.parent_id);
+  const rootRooms = visibleRooms.filter((r) => !r.parent_id);
 
   const renderRoomTree = (room, depth = 0) => {
     const isExpanded = !!expandedRooms[room.id];
-    const subrooms = rooms.filter((r) => r.parent_id === room.id);
+    const subrooms = visibleRooms.filter((r) => r.parent_id === room.id);
     const hasChildren = subrooms.length > 0;
     const isActive = activeRoom?.id === room.id;
 
@@ -245,111 +294,209 @@ export default function RoomTreeSidebar({
         )}
       </aside>
 
-      {/* Modal de Criação de Sala / Sub-canal */}
+      {/* Modal de Criação / Acesso de Sala */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl">
+            {/* Seletor de Modo (Apenas para salas raiz) */}
+            {!modalParentId && (
+              <div className="flex rounded-xl bg-zinc-950 p-1 border border-zinc-800 mb-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalMode('create');
+                    setError('');
+                  }}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    modalMode === 'create'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  + Nova Sala
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalMode('join');
+                    setError('');
+                  }}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    modalMode === 'join'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  # Acessar Sala
+                </button>
+              </div>
+            )}
+
             <h3 className="text-base font-bold text-white mb-1">
-              {modalParentId ? 'Criar Sub-Canal' : 'Criar Nova Sala'}
+              {modalParentId
+                ? 'Criar Sub-Canal'
+                : modalMode === 'create'
+                ? 'Criar Nova Sala'
+                : 'Acessar Sala Existente'}
             </h3>
             <p className="text-xs text-zinc-400 mb-4">
               {modalParentId
                 ? 'Canal filho conectado à árvore hierárquica.'
-                : 'Defina a URL e o tempo de vida da sala.'}
+                : modalMode === 'create'
+                ? 'Defina a URL e o tempo de vida da sala.'
+                : 'Informe o Identificador e Senha para vincular-se e acessar a sala.'}
             </p>
 
             {error && (
-              <div className="p-2 mb-3 rounded bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs">
-                {error}
+              <div className="p-2.5 mb-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
+                <span>⚠️</span>
+                <span>{error}</span>
               </div>
             )}
 
-            <form onSubmit={handleCreate} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-zinc-300 font-medium mb-1">Título Amigável</label>
-                <input
-                  type="text"
-                  placeholder="ex: Canal Geral Dev"
-                  value={formTitulo}
-                  onChange={(e) => setFormTitulo(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
+            {modalMode === 'join' && !modalParentId ? (
+              /* Formulário de Acesso por URL & Senha */
+              <form onSubmit={handleJoinExisting} className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1">
+                    Identificador (URL) da Sala
+                  </label>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-3 text-zinc-500 font-mono">#</span>
+                    <input
+                      type="text"
+                      placeholder="ex: jorge ou equipe-dev"
+                      value={joinNomeUrl}
+                      onChange={(e) => setJoinNomeUrl(e.target.value)}
+                      className="w-full pl-7 pr-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500 font-mono text-xs"
+                      required
+                      autoFocus
+                    />
+                  </div>
+                  <p className="text-[10px] text-zinc-500 mt-1">
+                    Insira o identificador exato da sala que deseja ingressar.
+                  </p>
+                </div>
 
-              <div>
-                <label className="block text-zinc-300 font-medium mb-1">Identificador URL</label>
-                <input
-                  type="text"
-                  placeholder="ex: geral-dev"
-                  value={formNomeUrl}
-                  onChange={(e) => setFormNomeUrl(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1">
+                    Senha de Acesso (opcional)
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Deixe em branco se a sala for pública"
+                    value={joinSenha}
+                    onChange={(e) => setJoinSenha(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500 text-xs"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-zinc-300 font-medium mb-1">Senha Opcional</label>
-                <input
-                  type="password"
-                  placeholder="Deixe em branco para pública"
-                  value={formSenha}
-                  onChange={(e) => setFormSenha(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateModal(false)}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading || !joinNomeUrl.trim()}
+                    className="px-3.5 py-1.5 rounded-lg bg-[#10b981] text-[#050a08] font-bold hover:bg-[#34d399] disabled:opacity-50 cursor-pointer transition-all shadow-md shadow-emerald-500/20"
+                  >
+                    {loading ? 'Validando...' : 'Acessar Sala'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* Formulário de Criação */
+              <form onSubmit={handleCreate} className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1">Título Amigável</label>
+                  <input
+                    type="text"
+                    placeholder="ex: Canal Geral Dev"
+                    value={formTitulo}
+                    onChange={(e) => setFormTitulo(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
 
-              {!modalParentId && (
-                <>
-                  {user?.is_site_admin && (
-                    <div>
-                      <label className="block text-zinc-300 font-medium mb-1">Tipo de Sala</label>
-                      <select
-                        value={formTipo}
-                        onChange={(e) => setFormTipo(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-emerald-500"
-                      >
-                        <option value="permanente">Permanente (SaaS / Institucional)</option>
-                        <option value="temporaria">Temporária (Efêmera com TTL)</option>
-                      </select>
-                    </div>
-                  )}
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1">Identificador URL</label>
+                  <input
+                    type="text"
+                    placeholder="ex: geral-dev"
+                    value={formNomeUrl}
+                    onChange={(e) => setFormNomeUrl(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
 
-                  {formTipo === 'temporaria' && (
-                    <div>
-                      <label className="block text-zinc-300 font-medium mb-1">TTL (Expiração)</label>
-                      <select
-                        value={formTtl}
-                        onChange={(e) => setFormTtl(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-emerald-500"
-                      >
-                        <option value="120">2 Horas</option>
-                        <option value="720">12 Horas</option>
-                        <option value="1440">24 Horas</option>
-                      </select>
-                    </div>
-                  )}
-                </>
-              )}
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1">Senha Opcional</label>
+                  <input
+                    type="password"
+                    placeholder="Deixe em branco para pública"
+                    value={formSenha}
+                    onChange={(e) => setFormSenha(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-500 disabled:opacity-50"
-                >
-                  {loading ? 'Salvando...' : 'Criar Canal'}
-                </button>
-              </div>
-            </form>
+                {!modalParentId && (
+                  <>
+                    {user?.is_site_admin && (
+                      <div>
+                        <label className="block text-zinc-300 font-medium mb-1">Tipo de Sala</label>
+                        <select
+                          value={formTipo}
+                          onChange={(e) => setFormTipo(e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-emerald-500"
+                        >
+                          <option value="permanente">Permanente (SaaS / Institucional)</option>
+                          <option value="temporaria">Temporária (Efêmera com TTL)</option>
+                        </select>
+                      </div>
+                    )}
+
+                    {formTipo === 'temporaria' && (
+                      <div>
+                        <label className="block text-zinc-300 font-medium mb-1">TTL (Expiração)</label>
+                        <select
+                          value={formTtl}
+                          onChange={(e) => setFormTtl(e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-white focus:outline-none focus:border-emerald-500"
+                        >
+                          <option value="120">2 Horas</option>
+                          <option value="720">12 Horas</option>
+                          <option value="1440">24 Horas</option>
+                        </select>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateModal(false)}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-500 disabled:opacity-50 cursor-pointer"
+                  >
+                    {loading ? 'Salvando...' : 'Criar Canal'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

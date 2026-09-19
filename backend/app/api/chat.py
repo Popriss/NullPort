@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia
 from app.schemas.chat import MessageCreate, MessageOut
-from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, RoomJoinRequest
+from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, RoomJoinRequest, RoomJoinByUrlRequest
 from app.services.auth import decode_access_token, get_password_hash, verify_password
 from app.services.sse import manager
 from app.services.storage import validate_and_sanitize_image, upload_image_to_r2
@@ -51,16 +51,19 @@ def list_available_rooms(
     user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lista todas as salas que o usuário tem acesso ou salas públicas."""
+    """Lista todas as salas acessíveis (zero-discovery para usuários comuns, todas para site_admin)."""
     membro_salas_ids = set(m.sala_id for m in user.membros)
 
     if user.is_site_admin:
         salas = db.query(Sala).order_by(Sala.created_at.desc()).all()
     else:
-        salas = db.query(Sala).filter(
-            (Sala.id.in_(membro_salas_ids)) | 
-            ((Sala.is_permanente == True) & (Sala.parent_id.is_(None)))
-        ).order_by(Sala.created_at.desc()).all()
+        salas = (
+            db.query(Sala)
+            .join(MembroSala, Sala.id == MembroSala.sala_id)
+            .filter(MembroSala.usuario_id == user.id)
+            .order_by(Sala.created_at.desc())
+            .all()
+        )
 
     results = []
     for s in salas:
@@ -73,30 +76,30 @@ def list_available_rooms(
 
 @router.get("/my-rooms", response_model=List[RoomOut])
 def list_my_rooms(
-    auth: dict = Depends(get_user_or_room_auth),
+    user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lista apenas as salas onde o usuário autenticado é membro (compatível com tokens legados/guest)."""
-    user_id = auth.get("user_id") or auth.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Identificador de usuário ausente no token.")
+    """
+    Lista EXCLUSIVAMENTE as salas onde o usuário logado é membro ativo.
+    Salas de outros grupos ou públicas só são visíveis se is_site_admin == True.
+    """
+    membro_salas_ids = set(m.sala_id for m in user.membros)
 
-    try:
-        user_uuid = UUID(str(user_id))
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Formato de ID de usuário inválido.")
+    if user.is_site_admin:
+        salas = db.query(Sala).order_by(Sala.created_at.desc()).all()
+    else:
+        salas = (
+            db.query(Sala)
+            .join(MembroSala, Sala.id == MembroSala.sala_id)
+            .filter(MembroSala.usuario_id == user.id)
+            .order_by(Sala.created_at.desc())
+            .all()
+        )
 
-    membro_sala_ids = [
-        m.sala_id for m in db.query(MembroSala).filter(MembroSala.usuario_id == user_uuid).all()
-    ]
-    if not membro_sala_ids:
-        return []
-
-    salas = db.query(Sala).filter(Sala.id.in_(membro_sala_ids)).order_by(Sala.created_at.desc()).all()
     results = []
     for s in salas:
         room_out = RoomOut.model_validate(s)
-        room_out.is_membro = True
+        room_out.is_membro = (s.id in membro_salas_ids) or user.is_site_admin
         room_out.tem_senha = bool(s.hash_senha)
         results.append(room_out)
     return results
@@ -112,6 +115,7 @@ def create_room(
     Criação de sala:
     - Usuário comum: apenas salas temporárias com TTL (expires_at calculado).
     - Site Admin: pode criar permanentes ou temporárias.
+    - Vincula o criador automaticamente como admin do chat na tabela membros_sala.
     """
     existing = db.query(Sala).filter(Sala.nome_url == req.nome_url.strip().lower()).first()
     if existing:
@@ -161,7 +165,55 @@ def create_room(
     db.add(membro)
     db.commit()
 
-    return room
+    room_out = RoomOut.model_validate(room)
+    room_out.is_membro = True
+    room_out.tem_senha = bool(room.hash_senha)
+    return room_out
+
+
+@router.post("/rooms/join-by-url", response_model=RoomOut)
+@router.post("/rooms/join", response_model=RoomOut)
+def join_room_by_url(
+    req: RoomJoinByUrlRequest,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Acessar sala existente informando o Identificador (URL) e a Senha.
+    Valida credenciais e vincula o usuário como membro na tabela membros_sala.
+    """
+    clean_url = req.nome_url.strip().lower().lstrip("#")
+    room = db.query(Sala).filter(Sala.nome_url == clean_url).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Sala não encontrada com o identificador informado.")
+
+    # Se a sala for protegida por senha e o usuário não for site_admin
+    if room.hash_senha and not user.is_site_admin:
+        if not req.senha:
+            raise HTTPException(status_code=403, detail="Esta sala é protegida por senha. Informe a senha de acesso.")
+        if not verify_password(req.senha, room.hash_senha):
+            raise HTTPException(status_code=403, detail="Senha da sala incorreta.")
+
+    # Vincula o usuário como membro se ainda não for
+    membro = db.query(MembroSala).filter(
+        MembroSala.sala_id == room.id,
+        MembroSala.usuario_id == user.id
+    ).first()
+
+    if not membro:
+        membro = MembroSala(
+            sala_id=room.id,
+            usuario_id=user.id,
+            role="padrao",
+            is_muted=False
+        )
+        db.add(membro)
+        db.commit()
+
+    room_out = RoomOut.model_validate(room)
+    room_out.is_membro = True
+    room_out.tem_senha = bool(room.hash_senha)
+    return room_out
 
 
 @router.post("/rooms/{room_id}/join", response_model=MemberOut)
@@ -218,11 +270,14 @@ def get_subrooms(
     user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Busca recursiva em árvore de canais filhos."""
+    """Busca recursiva em árvore de canais filhos (respeitando zero-discovery)."""
     membro_salas_ids = set(m.sala_id for m in user.membros)
 
     def build_tree(parent_uuid: UUID):
-        subs = db.query(Sala).filter(Sala.parent_id == parent_uuid).all()
+        query = db.query(Sala).filter(Sala.parent_id == parent_uuid)
+        if not user.is_site_admin:
+            query = query.filter(Sala.id.in_(membro_salas_ids))
+        subs = query.all()
         result = []
         for s in subs:
             s_dict = {
@@ -284,7 +339,10 @@ def create_subroom(
     db.add(MembroSala(sala_id=subroom.id, usuario_id=user.id, role="admin"))
     db.commit()
 
-    return subroom
+    subroom_out = RoomOut.model_validate(subroom)
+    subroom_out.is_membro = True
+    subroom_out.tem_senha = bool(subroom.hash_senha)
+    return subroom_out
 
 
 # --- MODERAÇÃO DE CHAT (RBAC LOCAL) ---
