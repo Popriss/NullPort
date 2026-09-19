@@ -242,6 +242,15 @@ export default function RoomTreeSidebar({
 
   return (
     <>
+      {/* Backdrop retrátil em telas móveis */}
+      {isOpen && (
+        <div
+          onClick={onClose}
+          className="fixed inset-0 z-30 bg-black/60 backdrop-blur-xs md:hidden animate-in fade-in duration-200"
+          title="Fechar menu lateral"
+        />
+      )}
+
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-64 bg-zinc-950/95 border-r border-zinc-800 p-4 flex flex-col justify-between transition-transform duration-300 backdrop-blur-md md:static md:translate-x-0 gpu-layer will-change-transform ${
           isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
@@ -257,7 +266,7 @@ export default function RoomTreeSidebar({
             <button
               onClick={() => openCreateDialog(null)}
               title="Criar nova sala"
-              className="p-1 px-2 text-xs font-semibold rounded-md bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 transition-all"
+              className="min-h-[44px] sm:min-h-[32px] p-2 px-3 text-xs font-semibold rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 transition-all flex items-center justify-center cursor-pointer"
             >
               + Nova
             </button>
@@ -285,7 +294,8 @@ export default function RoomTreeSidebar({
             {onClose && (
               <button
                 onClick={onClose}
-                className="md:hidden text-zinc-400 hover:text-white p-1 text-xs"
+                className="md:hidden min-h-[44px] min-w-[44px] flex items-center justify-center text-zinc-400 hover:text-white p-2 text-base cursor-pointer"
+                title="Fechar barra lateral"
               >
                 ✕
               </button>

@@ -253,13 +253,19 @@ export async function reactToMessage(messageId, emoji) {
   return response.json();
 }
 
-export function subscribeToMessages(onMessageCallback, roomId = null) {
+export function subscribeToMessages(onMessageCallback, roomId = null, onStatusChange = null) {
   const token = getToken();
   const url = roomId 
     ? `${API_URL}/api/chat/stream?token=${token}&room_id=${roomId}`
     : `${API_URL}/api/chat/stream?token=${token}`;
 
+  if (onStatusChange) onStatusChange('connecting');
+
   const eventSource = new EventSource(url);
+
+  eventSource.onopen = () => {
+    if (onStatusChange) onStatusChange('connected');
+  };
 
   eventSource.onmessage = (event) => {
     if (event.data === ": keep-alive") return;
@@ -273,10 +279,18 @@ export function subscribeToMessages(onMessageCallback, roomId = null) {
 
   eventSource.onerror = (err) => {
     console.error("Erro na conexão SSE:", err);
+    if (onStatusChange) {
+      if (eventSource.readyState === EventSource.CONNECTING) {
+        onStatusChange('reconnecting');
+      } else {
+        onStatusChange('disconnected');
+      }
+    }
   };
 
   return () => {
     eventSource.close();
+    if (onStatusChange) onStatusChange('disconnected');
   };
 }
 

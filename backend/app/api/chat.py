@@ -44,6 +44,28 @@ def get_user_or_room_auth(
     return payload
 
 
+def ensure_room_membership(db: Session, sala_id: UUID, usuario_id: UUID, role: str = "padrao") -> MembroSala:
+    """
+    Garante que o usuário seja membro da sala (tabela pivô membros_sala).
+    Registra a presença do usuário sempre que ele ingressar ou acessar uma sala.
+    """
+    membro = db.query(MembroSala).filter(
+        MembroSala.sala_id == sala_id,
+        MembroSala.usuario_id == usuario_id
+    ).first()
+    if not membro:
+        membro = MembroSala(
+            sala_id=sala_id,
+            usuario_id=usuario_id,
+            role=role,
+            is_muted=False
+        )
+        db.add(membro)
+        db.commit()
+        db.refresh(membro)
+    return membro
+
+
 # --- GESTÃO DE SALAS ---
 
 @router.get("/rooms", response_model=List[RoomOut])
@@ -156,14 +178,7 @@ def create_room(
     db.refresh(room)
 
     # Criador se torna admin do chat
-    membro = MembroSala(
-        sala_id=room.id,
-        usuario_id=user.id,
-        role="admin",
-        is_muted=False
-    )
-    db.add(membro)
-    db.commit()
+    ensure_room_membership(db, room.id, user.id, role="admin")
 
     room_out = RoomOut.model_validate(room)
     room_out.is_membro = True
@@ -195,20 +210,7 @@ def join_room_by_url(
             raise HTTPException(status_code=403, detail="Senha da sala incorreta.")
 
     # Vincula o usuário como membro se ainda não for
-    membro = db.query(MembroSala).filter(
-        MembroSala.sala_id == room.id,
-        MembroSala.usuario_id == user.id
-    ).first()
-
-    if not membro:
-        membro = MembroSala(
-            sala_id=room.id,
-            usuario_id=user.id,
-            role="padrao",
-            is_muted=False
-        )
-        db.add(membro)
-        db.commit()
+    ensure_room_membership(db, room.id, user.id, role="padrao")
 
     room_out = RoomOut.model_validate(room)
     room_out.is_membro = True
@@ -237,21 +239,7 @@ def join_room(
         if not verify_password(senha_informada, room.hash_senha):
             raise HTTPException(status_code=403, detail="Senha da sala incorreta.")
 
-    membro = db.query(MembroSala).filter(
-        MembroSala.sala_id == room_id,
-        MembroSala.usuario_id == user.id
-    ).first()
-
-    if not membro:
-        membro = MembroSala(
-            sala_id=room_id,
-            usuario_id=user.id,
-            role="padrao",
-            is_muted=False
-        )
-        db.add(membro)
-        db.commit()
-        db.refresh(membro)
+    membro = ensure_room_membership(db, room_id, user.id, role="padrao")
 
     return MemberOut(
         id=membro.id,
@@ -336,8 +324,7 @@ def create_subroom(
     db.refresh(subroom)
 
     # O criador é admin da sub-sala
-    db.add(MembroSala(sala_id=subroom.id, usuario_id=user.id, role="admin"))
-    db.commit()
+    ensure_room_membership(db, subroom.id, user.id, role="admin")
 
     subroom_out = RoomOut.model_validate(subroom)
     subroom_out.is_membro = True

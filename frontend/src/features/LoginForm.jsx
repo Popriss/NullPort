@@ -12,7 +12,8 @@ import { loginUser, registerUser, enterRoom } from '../services/auth';
  * - Coluna Direita: Console de autenticação minimalista com inputs com ícones, password toggles e switcher rápido.
  */
 export default function LoginForm({ onLoginSuccess }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'register' | 'room'
+  const [mainTab, setMainTab] = useState('account'); // 'account' | 'ephemeral'
+  const [accountMode, setAccountMode] = useState('login'); // 'login' | 'register'
   const [loginId, setLoginId] = useState('');
   const [senha, setSenha] = useState('');
   const [nickname, setNickname] = useState('');
@@ -20,6 +21,20 @@ export default function LoginForm({ onLoginSuccess }) {
   const [nomeUrl, setNomeUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [coldStartNotice, setColdStartNotice] = useState(false);
+
+  // Cold Start Detection: Render Free Tier pode levar até 45s para acordar o container
+  React.useEffect(() => {
+    let timer;
+    if (loading) {
+      timer = setTimeout(() => {
+        setColdStartNotice(true);
+      }, 2500);
+    } else {
+      setColdStartNotice(false);
+    }
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -27,26 +42,28 @@ export default function LoginForm({ onLoginSuccess }) {
     setLoading(true);
 
     try {
-      if (mode === 'login') {
-        if (!loginId.trim() || !senha) {
-          throw new Error('Informe seu identificador e senha.');
+      if (mainTab === 'account') {
+        if (accountMode === 'login') {
+          if (!loginId.trim() || !senha) {
+            throw new Error('Informe seu identificador e senha.');
+          }
+          const data = await loginUser({ login: loginId.trim(), senha });
+          onLoginSuccess(data.user);
+        } else {
+          if (!nickname.trim() || !email.trim() || !senha) {
+            throw new Error('Preencha todos os campos para criar a conta.');
+          }
+          if (senha.length < 6) {
+            throw new Error('A senha deve conter no mínimo 6 caracteres.');
+          }
+          const data = await registerUser({
+            nickname: nickname.trim(),
+            email: email.trim().toLowerCase(),
+            senha,
+          });
+          onLoginSuccess(data.user);
         }
-        const data = await loginUser({ login: loginId.trim(), senha });
-        onLoginSuccess(data.user);
-      } else if (mode === 'register') {
-        if (!nickname.trim() || !email.trim() || !senha) {
-          throw new Error('Preencha todos os campos para criar a conta.');
-        }
-        if (senha.length < 6) {
-          throw new Error('A senha deve conter no mínimo 6 caracteres.');
-        }
-        const data = await registerUser({
-          nickname: nickname.trim(),
-          email: email.trim().toLowerCase(),
-          senha,
-        });
-        onLoginSuccess(data.user);
-      } else if (mode === 'room') {
+      } else if (mainTab === 'ephemeral') {
         if (!nomeUrl.trim() || !nickname.trim()) {
           throw new Error('Informe o identificador da sala e seu nickname.');
         }
@@ -77,7 +94,7 @@ export default function LoginForm({ onLoginSuccess }) {
       <section className="flex-1 min-h-[380px] md:min-h-screen relative overflow-hidden bg-[#050a08]">
         {/* Canvas de Partículas 3D Interativo com máscara alfa progressiva */}
         <GalaxyCanvas
-          particleCount={2200}
+          particleCount={700}
           interactive={true}
           opacity={1.0}
           fadeEdges={true}
@@ -98,9 +115,9 @@ export default function LoginForm({ onLoginSuccess }) {
               v2.4 // PROTOCOL
             </span>
           </div>
-          <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-400 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-emerald-500/10">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>CORE ONLINE • 2.2K PARTICLES</span>
+          <div className="hidden sm:flex items-center gap-2 text-[11px] font-mono text-zinc-500">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>NODE ONLINE</span>
           </div>
         </div>
 
@@ -112,21 +129,25 @@ export default function LoginForm({ onLoginSuccess }) {
           </div>
         </div>
 
-        {/* Bottom Overlay: Tipografia & Badges Minimalistas */}
-        <div className="absolute inset-0 flex flex-col justify-end p-6 md:p-12 pointer-events-none bg-gradient-to-t from-[#050a08] via-[#050a08]/40 to-transparent z-20">
-          <div className="space-y-4 max-w-lg">
-            <div>
-              <h1 className="text-4xl md:text-6xl font-black tracking-tight text-white flex items-center gap-1">
-                <span className="text-emerald-400 drop-shadow-[0_0_25px_rgba(16,185,129,0.4)]">Null</span>
-                <span>Port</span>
-              </h1>
-              <p className="text-xs md:text-sm font-mono text-zinc-400 uppercase tracking-widest mt-1">
-                Arquitetura de Comunicação Defensiva & Zero-Login
-              </p>
+        {/* Conteúdo Central Hero com Tipografia Tech */}
+        <div className="absolute inset-0 flex flex-col justify-end p-8 md:p-14 pointer-events-none z-20">
+          <div className="max-w-xl space-y-4">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              <span>SISTEMA DE MENSAGENS CRIPTOGRAFADAS</span>
             </div>
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight font-sans">
+              Comunicação Efêmera. <br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400">
+                Zero Rastros Digitais.
+              </span>
+            </h1>
+            <p className="text-sm sm:text-base text-zinc-400 max-w-lg leading-relaxed font-sans">
+              Hub descentralizado de chat com salas temporárias autodestrutivas, moderação em tempo real e privacidade estrita.
+            </p>
 
-            {/* Chips de Recursos Técnicos */}
-            <div className="flex flex-wrap gap-2 pt-1 font-mono text-[10px]">
+            {/* Badges de Destaque Tecnológico */}
+            <div className="pt-2 flex flex-wrap gap-2 text-[11px] font-mono">
               <span className="px-2.5 py-1 rounded-md bg-emerald-950/40 border border-emerald-500/20 text-emerald-300">
                 [ 🔐 E2EE READY ]
               </span>
@@ -149,7 +170,7 @@ export default function LoginForm({ onLoginSuccess }) {
         <div className="w-full max-w-md p-6 sm:p-8 rounded-2xl bg-black/40 border border-emerald-500/20 backdrop-blur-xl shadow-[0_0_50px_-15px_rgba(16,185,129,0.12)] space-y-6">
           
           {/* Header do Card com Linha de Comando */}
-          <div className="space-y-2">
+          <div className="space-y-4">
             <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 pb-2 border-b border-zinc-800/80">
               <span className="flex items-center gap-1.5 text-zinc-400">
                 <span className="text-emerald-500 font-bold">$</span> auth --session
@@ -163,58 +184,89 @@ export default function LoginForm({ onLoginSuccess }) {
             <div className="pt-1">
               <h2 className="text-xl sm:text-2xl font-bold text-zinc-100 tracking-tight flex items-center justify-between">
                 <span>
-                  {mode === 'login' && 'Entrar na Plataforma'}
-                  {mode === 'register' && 'Cadastrar Operador'}
-                  {mode === 'room' && 'Acesso Zero-Login'}
+                  {mainTab === 'account'
+                    ? (accountMode === 'login' ? 'Entrar na Plataforma' : 'Cadastrar Operador')
+                    : 'Acesso Direto / Sala Efêmera'}
                 </span>
               </h2>
               <p className="text-xs text-zinc-400 mt-0.5">
-                {mode === 'login' && 'Autentique com suas credenciais para gerenciar canais.'}
-                {mode === 'register' && 'Crie uma conta para criar salas e moderar canais.'}
-                {mode === 'room' && 'Acesse uma sala temporária diretamente sem criar conta.'}
+                {mainTab === 'account'
+                  ? (accountMode === 'login'
+                      ? 'Autentique com suas credenciais para gerenciar seus canais.'
+                      : 'Crie uma conta para criar salas permanentes e moderar canais.')
+                  : 'Acesse uma sala temporária diretamente por URL sem criar conta.'}
               </p>
             </div>
           </div>
 
-          {/* Seletor Segmentado Minimalista */}
-          <div className="flex rounded-xl bg-black/60 p-1 border border-zinc-800/80 text-xs font-mono">
+          {/* Duas Abas Principais: 'Minha Conta' vs 'Acesso Direto / Sala Efêmera' */}
+          <div className="flex rounded-xl bg-black/70 p-1 border border-zinc-800/80 text-xs font-mono gap-1">
             <button
               type="button"
-              onClick={() => { setMode('login'); setError(''); }}
-              className={`flex-1 py-2 rounded-lg font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                mode === 'login'
-                  ? 'bg-emerald-500 text-[#050a08] font-bold shadow-[0_0_15px_rgba(16,185,129,0.3)]'
-                  : 'text-zinc-400 hover:text-emerald-300'
+              onClick={() => { setMainTab('account'); setError(''); }}
+              className={`flex-1 py-2.5 px-3 rounded-lg font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                mainTab === 'account'
+                  ? 'bg-emerald-500 text-[#050a08] shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
               }`}
             >
-              <span>🔐</span>
-              <span>Entrar</span>
+              <span>👤</span>
+              <span>Minha Conta</span>
             </button>
             <button
               type="button"
-              onClick={() => { setMode('register'); setError(''); }}
-              className={`flex-1 py-2 rounded-lg font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                mode === 'register'
-                  ? 'bg-emerald-500 text-[#050a08] font-bold shadow-[0_0_15px_rgba(16,185,129,0.3)]'
-                  : 'text-zinc-400 hover:text-emerald-300'
-              }`}
-            >
-              <span>⚡</span>
-              <span>Cadastrar</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('room'); setError(''); }}
-              className={`flex-1 py-2 rounded-lg font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                mode === 'room'
-                  ? 'bg-emerald-500 text-[#050a08] font-bold shadow-[0_0_15px_rgba(16,185,129,0.3)]'
-                  : 'text-zinc-400 hover:text-emerald-300'
+              onClick={() => { setMainTab('ephemeral'); setError(''); }}
+              className={`flex-1 py-2.5 px-3 rounded-lg font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                mainTab === 'ephemeral'
+                  ? 'bg-emerald-500 text-[#050a08] shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
               }`}
             >
               <span>🚪</span>
-              <span>Sala Direta</span>
+              <span>Acesso Direto</span>
             </button>
           </div>
+
+          {/* Sub-seletor dentro de 'Minha Conta': Entrar vs Cadastrar */}
+          {mainTab === 'account' && (
+            <div className="flex rounded-lg bg-zinc-900/70 p-1 border border-zinc-800/90 text-xs font-mono">
+              <button
+                type="button"
+                onClick={() => { setAccountMode('login'); setError(''); }}
+                className={`flex-1 py-1.5 rounded-md font-medium transition-all ${
+                  accountMode === 'login'
+                    ? 'bg-zinc-800 text-emerald-300 font-bold shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                🔐 Entrar
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAccountMode('register'); setError(''); }}
+                className={`flex-1 py-1.5 rounded-md font-medium transition-all ${
+                  accountMode === 'register'
+                    ? 'bg-zinc-800 text-emerald-300 font-bold shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                ⚡ Criar Conta
+              </button>
+            </div>
+          )}
+
+          {/* Spinner e Indicador de Cold Start (Render Free Tier) */}
+          {loading && coldStartNotice && (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-start gap-3 animate-pulse">
+              <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin flex-shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-amber-200">Inicializando container na nuvem...</p>
+                <p className="text-[11px] text-amber-400/80 leading-relaxed">
+                  O servidor no Render Free Tier hiberna após inatividade. O primeiro acesso pode levar até 45 segundos para responder.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Alerta de Erro Monospace */}
           {error && (
@@ -226,7 +278,7 @@ export default function LoginForm({ onLoginSuccess }) {
 
           {/* Formulários por Modo */}
           <form onSubmit={handleAuth} className="space-y-4">
-            {mode === 'login' && (
+            {mainTab === 'account' && accountMode === 'login' && (
               <>
                 <Input
                   label="E-mail ou Nickname"
@@ -259,14 +311,14 @@ export default function LoginForm({ onLoginSuccess }) {
                 <div className="pt-2 flex flex-col sm:flex-row items-center justify-between text-[11px] font-mono text-zinc-500 gap-2 border-t border-zinc-900">
                   <button
                     type="button"
-                    onClick={() => { setMode('register'); setError(''); }}
+                    onClick={() => { setAccountMode('register'); setError(''); }}
                     className="hover:text-emerald-400 transition-colors cursor-pointer"
                   >
                     Não tem conta? <span className="underline decoration-emerald-500/40">Criar agora</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setMode('room'); setError(''); }}
+                    onClick={() => { setMainTab('ephemeral'); setError(''); }}
                     className="hover:text-emerald-400 transition-colors cursor-pointer"
                   >
                     Entrar em sala sem login →
@@ -275,7 +327,7 @@ export default function LoginForm({ onLoginSuccess }) {
               </>
             )}
 
-            {mode === 'register' && (
+            {mainTab === 'account' && accountMode === 'register' && (
               <>
                 <Input
                   label="Nickname Único"
@@ -316,7 +368,7 @@ export default function LoginForm({ onLoginSuccess }) {
                 <div className="pt-2 text-center text-[11px] font-mono text-zinc-500 border-t border-zinc-900">
                   <button
                     type="button"
-                    onClick={() => { setMode('login'); setError(''); }}
+                    onClick={() => { setAccountMode('login'); setError(''); }}
                     className="hover:text-emerald-400 transition-colors cursor-pointer"
                   >
                     Já possui credenciais? <span className="underline decoration-emerald-500/40">Entrar na conta</span>
@@ -325,7 +377,7 @@ export default function LoginForm({ onLoginSuccess }) {
               </>
             )}
 
-            {mode === 'room' && (
+            {mainTab === 'ephemeral' && (
               <>
                 <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-emerald-300 text-[11px] font-mono leading-relaxed">
                   <span className="font-bold text-emerald-400">⚡ ZERO-LOGIN:</span> Conecte-se diretamente a uma sala temporária ou permanente sem criar e-mail ou registrar senha de conta.
@@ -368,7 +420,7 @@ export default function LoginForm({ onLoginSuccess }) {
                 <div className="pt-2 text-center text-[11px] font-mono text-zinc-500 border-t border-zinc-900">
                   <button
                     type="button"
-                    onClick={() => { setMode('register'); setError(''); }}
+                    onClick={() => { setMainTab('account'); setAccountMode('register'); setError(''); }}
                     className="hover:text-emerald-400 transition-colors cursor-pointer"
                   >
                     Deseja canais permanentes? <span className="underline decoration-emerald-500/40">Criar conta SaaS</span>

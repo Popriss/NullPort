@@ -190,12 +190,16 @@ def enter_or_create_room(req: RoomEnterRequest, db: Session = Depends(get_db)):
         db.refresh(room)
 
     # Cria/Busca usuário convidado (Guest) para acesso sem login global
-    guest_nick = req.nickname.strip() if req.nickname else f'Anon_{str(uuid4())[:6]}'
-    user = db.query(Usuario).filter(Usuario.nickname == guest_nick).first()
+    raw_nick = req.nickname.strip() if req.nickname else f'Anon_{str(uuid4())[:6]}'
+    user = db.query(Usuario).filter(Usuario.nickname == raw_nick).first()
+    if user and not user.is_guest:
+        raw_nick = f'{raw_nick}_{str(uuid4())[:4]}'
+        user = None
     if not user:
+        guest_email = f"{raw_nick.lower().replace(' ', '_')}_{str(uuid4())[:8]}@guest.nullport"
         user = Usuario(
-            nickname=guest_nick,
-            email=f'{guest_nick.lower()}@guest.nullport',
+            nickname=raw_nick,
+            email=guest_email,
             senha_hash='',
             is_guest=True
         )

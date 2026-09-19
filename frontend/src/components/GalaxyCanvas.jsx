@@ -8,7 +8,7 @@ import React, { useEffect, useRef } from 'react';
  * pausando automaticamente via `document.hidden` para economia de CPU/bateria.
  */
 export default function GalaxyCanvas({
-  particleCount = 2200,
+  particleCount = 700,
   interactive = true,
   opacity = 1.0,
   fadeEdges = false,
@@ -33,9 +33,15 @@ export default function GalaxyCanvas({
 
     // Ajusta contagem para telas móveis para preservar performance cravada a 60 FPS
     const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-    const actualParticleCount = isMobile ? Math.min(particleCount, 700) : particleCount;
+    const actualParticleCount = isMobile ? Math.min(particleCount, 500) : particleCount;
 
-    // Estado do mouse
+    // Estado do mouse e arraste
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let manualRotX = 0;
+    let manualRotY = 0;
+
     const mouse = {
       x: -1000,
       y: -1000,
@@ -136,12 +142,29 @@ export default function GalaxyCanvas({
     let galaxyRotation = 0;
 
     // Listeners do Mouse para Coluna Esquerda
+    // Listeners do Mouse e Arraste para Rotação 3D
+    const handleMouseDown = (e) => {
+      if (!interactive) return;
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+    };
+
     const handleMouseMove = (e) => {
       if (!interactive) return;
       const rect = container.getBoundingClientRect();
       mouse.x = e.clientX - rect.left;
       mouse.y = e.clientY - rect.top;
       mouse.active = true;
+
+      if (isDragging) {
+        const deltaX = e.clientX - dragStartX;
+        const deltaY = e.clientY - dragStartY;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        manualRotY += deltaX * 0.006;
+        manualRotX += deltaY * 0.006;
+      }
 
       // Inclinação suave da câmera no mouse move (-0.15 a +0.15 radianos)
       const nx = (mouse.x / width - 0.5) * 2;
@@ -150,14 +173,45 @@ export default function GalaxyCanvas({
       mouse.targetTiltY = nx * 0.22;
     };
 
+    const handleMouseUp = () => {
+      isDragging = false;
+    };
+
     const handleMouseLeave = () => {
       mouse.active = false;
+      isDragging = false;
       mouse.targetTiltX = 0;
       mouse.targetTiltY = 0;
     };
 
+    const handleTouchStart = (e) => {
+      if (!interactive || !e.touches[0]) return;
+      isDragging = true;
+      dragStartX = e.touches[0].clientX;
+      dragStartY = e.touches[0].clientY;
+    };
+
+    const handleTouchMove = (e) => {
+      if (!interactive || !isDragging || !e.touches[0]) return;
+      const deltaX = e.touches[0].clientX - dragStartX;
+      const deltaY = e.touches[0].clientY - dragStartY;
+      dragStartX = e.touches[0].clientX;
+      dragStartY = e.touches[0].clientY;
+      manualRotY += deltaX * 0.006;
+      manualRotX += deltaY * 0.006;
+    };
+
+    const handleTouchEnd = () => {
+      isDragging = false;
+    };
+
+    container.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
     container.addEventListener('mousemove', handleMouseMove, { passive: true });
     container.addEventListener('mouseleave', handleMouseLeave, { passive: true });
+    container.addEventListener('touchstart', handleTouchStart, { passive: true });
+    container.addEventListener('touchmove', handleTouchMove, { passive: true });
+    container.addEventListener('touchend', handleTouchEnd, { passive: true });
 
     // Eco-Mode: Pausa a renderização quando a aba do navegador perde visibilidade
     const handleVisibilityChange = () => {
@@ -204,8 +258,8 @@ export default function GalaxyCanvas({
       mouse.currentTiltX += (mouse.targetTiltX - mouse.currentTiltX) * 0.05;
       mouse.currentTiltY += (mouse.targetTiltY - mouse.currentTiltY) * 0.05;
 
-      const tiltX = baseCameraTiltX + mouse.currentTiltX;
-      const tiltY = mouse.currentTiltY;
+      const tiltX = baseCameraTiltX + mouse.currentTiltX + manualRotX;
+      const tiltY = mouse.currentTiltY + manualRotY;
 
       // Rotação contínua da galáxia
       galaxyRotation += 0.0012;
@@ -327,8 +381,13 @@ export default function GalaxyCanvas({
     return () => {
       isPaused = true;
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      container.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mouseup', handleMouseUp);
       container.removeEventListener('mousemove', handleMouseMove);
       container.removeEventListener('mouseleave', handleMouseLeave);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('touchmove', handleTouchMove);
+      container.removeEventListener('touchend', handleTouchEnd);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       resizeObserver.disconnect();
     };

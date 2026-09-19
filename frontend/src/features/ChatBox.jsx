@@ -43,10 +43,29 @@ export default function ChatBox({
   const [menuPlacement, setMenuPlacement] = useState('up'); // 'up' | 'down'
   const [highlightedMessageId, setHighlightedMessageId] = useState(null);
 
+  // Estados para UX, Toasts, SSE e Drag-and-Drop
+  const [toasts, setToasts] = useState([]);
+  const [sseStatus, setSseStatus] = useState('connecting'); // 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [compressionProgress, setCompressionProgress] = useState(0);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [showScrollBottomButton, setShowScrollBottomButton] = useState(false);
+  const [unreadBelowCount, setUnreadBelowCount] = useState(0);
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const isInitialLoadRef = useRef(true);
   const scrollRafRef = useRef(null);
+
+  // Helper de Notificações Toast Modernas
+  const showToast = (message, type = 'info') => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  };
 
   // Scroll suave não-bloqueante throttled com requestAnimationFrame
   const scrollToBottom = (smooth = true) => {
@@ -59,6 +78,17 @@ export default function ChatBox({
         block: 'end'
       });
     });
+  };
+
+  const handleMessagesScroll = (e) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 120;
+    if (isNearBottom) {
+      setShowScrollBottomButton(false);
+      setUnreadBelowCount(0);
+    } else {
+      setShowScrollBottomButton(true);
+    }
   };
 
   const handleScrollToMessage = (targetId) => {
@@ -241,8 +271,8 @@ export default function ChatBox({
           prev.filter((m) => m.usuario_id !== eventData.user_id && m.id !== eventData.user_id)
         );
         if (eventData.user_id === user?.id) {
-          alert("Você foi removido desta sala por um administrador.");
-          window.location.reload();
+          showToast("Você foi removido desta sala por um administrador.", "error");
+          setTimeout(() => window.location.reload(), 1800);
         }
         return;
       }
@@ -253,33 +283,42 @@ export default function ChatBox({
         if (prev.some((m) => m.id === newMessage.id)) return prev;
         return [...prev, newMessage];
       });
+
+      if (showScrollBottomButton) {
+        setUnreadBelowCount((prev) => prev + 1);
+      }
+
       notifyNewMessage(newMessage);
-    }, roomId);
+    }, roomId, (status) => {
+      setSseStatus(status);
+    });
 
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [roomId, activeRoom]);
+  }, [roomId, activeRoom, showScrollBottomButton]);
 
-  // Scroll automático throttled e não-bloqueante
+  // Scroll automático inteligente throttled e não-bloqueante
   useEffect(() => {
     if (messages.length === 0) return;
 
     if (isInitialLoadRef.current) {
       scrollToBottom(false);
       isInitialLoadRef.current = false;
-    } else {
+    } else if (!showScrollBottomButton) {
       scrollToBottom(true);
     }
 
     return () => {
       if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
     };
-  }, [messages]);
+  }, [messages, showScrollBottomButton]);
 
   // Ao mudar de sala, prepara o carregamento inicial instantâneo
   useEffect(() => {
     isInitialLoadRef.current = true;
+    setShowScrollBottomButton(false);
+    setUnreadBelowCount(0);
   }, [roomId]);
 
   // Envio de mensagem
@@ -300,36 +339,91 @@ export default function ChatBox({
       } else {
         await sendMessage(textToSend, replyId);
       }
+      // Garante scroll até a própria mensagem recém-enviada
+      scrollToBottom(true);
+      setShowScrollBottomButton(false);
+      setUnreadBelowCount(0);
     } catch (err) {
       console.error("Erro ao enviar mensagem:", err);
-      alert(err.message || "Falha ao enviar mensagem.");
+      showToast(err.message || "Falha ao enviar mensagem.", "error");
       setInput(textToSend);
     } finally {
       setSending(false);
     }
   };
 
-  // Upload com compressão client-side
-  const handleImageUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || isUserMuted || userRole === 'view') return;
+  // Processamento e compressão de imagem client-side (para upload e drag-and-drop)
+  const processAndUploadImage = async (file) => {
+    if (!file || isUserMuted || userRole === 'view') {
+      if (isUserMuted || userRole === 'view') {
+        showToast("Você não possui permissão para enviar imagens nesta sala.", "warning");
+      }
+      return;
+    }
 
     try {
-      setUploading(true);
+      setIsCompressing(true);
+      setCompressionProgress(20);
+
+      const compInterval = setInterval(() => {
+        setCompressionProgress((p) => Math.min(p + 20, 85));
+      }, 120);
+
       const compressed = await compressImage(file);
+      clearInterval(compInterval);
+      setCompressionProgress(92);
+
+      setUploading(true);
       const { url } = await uploadImage(compressed);
+      setCompressionProgress(100);
+
+      const replyId = replyingTo ? replyingTo.id : null;
       if (activeRoom?.id) {
-        await sendRoomMessage(activeRoom.id, url, replyingTo ? replyingTo.id : null);
+        await sendRoomMessage(activeRoom.id, url, replyId);
       } else {
-        await sendMessage(url, replyingTo ? replyingTo.id : null);
+        await sendMessage(url, replyId);
       }
       setReplyingTo(null);
+      scrollToBottom(true);
+      showToast("Imagem comprimida e enviada com sucesso!", "success");
     } catch (err) {
       console.error("Erro no upload de imagem:", err);
-      alert(err.message || "Erro no upload.");
+      showToast(err.message || "Erro ao processar imagem.", "error");
     } finally {
+      setIsCompressing(false);
       setUploading(false);
+      setCompressionProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (file) processAndUploadImage(file);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    if (isUserMuted || userRole === 'view') return;
+    setIsDraggingOver(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDraggingOver(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    if (isUserMuted || userRole === 'view') return;
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    if (file.type.startsWith('image/')) {
+      processAndUploadImage(file);
+    } else {
+      showToast("Apenas arquivos de imagem são suportados para envio direto.", "warning");
     }
   };
 
@@ -350,7 +444,7 @@ export default function ChatBox({
 
   const copiarTexto = (texto) => {
     navigator.clipboard.writeText(texto);
-    alert("Mensagem copiada para a área de transferência!");
+    showToast("Mensagem copiada para a área de transferência!", "success");
   };
 
   const handleMuteAction = async (targetUserId, shouldMute) => {
@@ -367,8 +461,9 @@ export default function ChatBox({
       if (targetUserId === user?.id) {
         setIsUserMuted(shouldMute);
       }
+      showToast(shouldMute ? "Membro silenciado." : "Membro desmutado.", "info");
     } catch (err) {
-      alert(err.message || "Erro ao atualizar mute.");
+      showToast(err.message || "Erro ao atualizar mute.", "error");
     }
   };
 
@@ -380,8 +475,9 @@ export default function ChatBox({
       setMembers((prev) =>
         prev.filter((m) => m.usuario_id !== targetUserId && m.id !== targetUserId)
       );
+      showToast("Membro removido da sala com sucesso.", "success");
     } catch (err) {
-      alert(err.message || "Erro ao banir membro.");
+      showToast(err.message || "Erro ao banir membro.", "error");
     }
   };
 
@@ -399,8 +495,9 @@ export default function ChatBox({
       if (targetUserId === user?.id && !user?.is_site_admin) {
         setUserRole(newRole);
       }
+      showToast(`Cargo atualizado para ${newRole.toUpperCase()}.`, "success");
     } catch (err) {
-      alert(err.message || "Erro ao alterar cargo do membro.");
+      showToast(err.message || "Erro ao alterar cargo do membro.", "error");
     }
   };
 
@@ -408,21 +505,55 @@ export default function ChatBox({
   const isInputDisabled = isUserMuted || userRole === 'view' || sending;
 
   return (
-    <div className="flex flex-col h-[88vh] w-full max-w-5xl mx-auto bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="relative flex flex-col h-[88vh] w-full max-w-5xl mx-auto bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden"
+    >
       {/* Header do Chat */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-zinc-800 bg-zinc-950">
         <div className="flex items-center gap-3">
           {onToggleSidebar && (
             <button
               onClick={onToggleSidebar}
-              className="md:hidden p-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:text-white"
+              className="md:hidden min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-lg bg-zinc-800 text-zinc-300 hover:text-white cursor-pointer"
               title="Abrir lista de canais"
             >
               ☰
             </button>
           )}
 
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+          {/* Badge SSE Connection State em Tempo Real */}
+          <div className="flex items-center">
+            {sseStatus === 'connected' && (
+              <div
+                title="Conexão em tempo real estabelecida via SSE"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/30"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="hidden sm:inline">Conectado</span>
+              </div>
+            )}
+            {(sseStatus === 'reconnecting' || sseStatus === 'connecting') && (
+              <div
+                title="Tentando restabelecer fluxo SSE com o servidor..."
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/30"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                <span className="hidden sm:inline">Reconectando...</span>
+              </div>
+            )}
+            {sseStatus === 'disconnected' && (
+              <div
+                title="Servidor indisponível ou conexão encerrada"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono text-rose-400 bg-rose-500/10 border border-rose-500/30"
+              >
+                <span className="w-2 h-2 rounded-full bg-rose-500" />
+                <span className="hidden sm:inline">Servidor Indisponível</span>
+              </div>
+            )}
+          </div>
 
           <div>
             <div className="flex items-center gap-2">
@@ -450,21 +581,25 @@ export default function ChatBox({
                 setIsModDrawerOpen(true);
                 loadRoomMembers();
               }}
-              className="text-xs font-semibold py-1.5 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 transition-all flex items-center gap-1.5"
+              className="text-xs font-semibold min-h-[44px] py-1.5 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 transition-all flex items-center gap-1.5 cursor-pointer"
             >
               <span>🛡️</span>
               <span className="hidden sm:inline">Moderação</span>
             </button>
           )}
 
-          <Button variant="secondary" onClick={onLogout} className="text-xs py-1.5 px-3">
+          <Button variant="secondary" onClick={onLogout} className="text-xs min-h-[44px] py-1.5 px-3">
             Sair
           </Button>
         </div>
       </div>
 
       {/* Lista de Mensagens */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2 custom-scrollbar will-change-scroll [transform:translateZ(0)]">
+      <div
+        ref={messagesContainerRef}
+        onScroll={handleMessagesScroll}
+        className="relative flex-1 overflow-y-auto px-4 py-3 space-y-2 custom-scrollbar will-change-scroll [transform:translateZ(0)]"
+      >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-xs py-12">
             <span className="text-3xl mb-2">💬</span>
@@ -631,7 +766,7 @@ export default function ChatBox({
                   <div className="relative flex items-center overflow-visible">
                     <button
                       onClick={(e) => handleToggleMenu(e, msg.id)}
-                      className="opacity-0 max-sm:opacity-70 group-hover/msg:opacity-100 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 active:scale-95 transition-all duration-120 cursor-pointer gpu-layer"
+                      className="opacity-0 max-sm:opacity-80 group-hover/msg:opacity-100 min-w-[44px] min-h-[44px] sm:min-w-[32px] sm:min-h-[32px] flex items-center justify-center p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 active:scale-95 transition-all duration-120 cursor-pointer gpu-layer"
                       title="Mais opções"
                     >
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -651,7 +786,7 @@ export default function ChatBox({
                             : 'top-full mt-2'
                         }`}
                       >
-                        {/* Emojis Rápidos */}
+                        {/* Emojis Rápidos (touch targets >= 44x44px em mobile) */}
                         <div className="flex items-center justify-between gap-1 px-1 py-1 mb-1">
                           {EMOJIS_DISPONIVEIS.map((emoji) => (
                             <button
@@ -660,7 +795,7 @@ export default function ChatBox({
                                 handleReaction(msg.id, emoji);
                                 setActiveMenuId(null);
                               }}
-                              className="hover:scale-125 active:scale-90 transition-transform duration-75 text-sm cursor-pointer p-1"
+                              className="flex items-center justify-center min-w-[44px] min-h-[44px] sm:min-w-[32px] sm:min-h-[32px] text-lg sm:text-base hover:scale-125 active:scale-90 transition-transform duration-75 cursor-pointer p-1"
                               title={`Reagir com ${emoji}`}
                             >
                               {emoji}
@@ -677,7 +812,7 @@ export default function ChatBox({
                               setReplyingTo(msg);
                               setActiveMenuId(null);
                             }}
-                            className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-zinc-300 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer text-left"
+                            className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] sm:min-h-[34px] text-xs text-zinc-300 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer text-left"
                           >
                             <span>↩️</span>
                             <span>Responder</span>
@@ -690,7 +825,7 @@ export default function ChatBox({
                             copiarTexto(msg.conteudo);
                             setActiveMenuId(null);
                           }}
-                          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-zinc-300 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer text-left"
+                          className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] sm:min-h-[34px] text-xs text-zinc-300 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer text-left"
                         >
                           <span>📋</span>
                           <span>Copiar mensagem</span>
@@ -703,6 +838,29 @@ export default function ChatBox({
             );
           })
         )}
+
+        {/* Botão Flutuante de Auto-Scroll Inteligente */}
+        {showScrollBottomButton && (
+          <div className="sticky bottom-3 left-0 right-0 flex justify-center pointer-events-none z-30">
+            <button
+              type="button"
+              onClick={() => {
+                scrollToBottom(true);
+                setShowScrollBottomButton(false);
+                setUnreadBelowCount(0);
+              }}
+              className="pointer-events-auto px-4 py-2 min-h-[44px] rounded-full bg-zinc-900/95 text-emerald-400 border border-emerald-500/40 text-xs font-mono font-semibold shadow-2xl backdrop-blur-md hover:bg-emerald-500 hover:text-black transition-all flex items-center gap-2 cursor-pointer animate-bounce"
+            >
+              <span>↓ Novas mensagens abaixo</span>
+              {unreadBelowCount > 0 && (
+                <span className="px-2 py-0.5 bg-emerald-500 text-black text-[10px] font-bold rounded-full">
+                  {unreadBelowCount}
+                </span>
+              )}
+            </button>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
@@ -727,6 +885,25 @@ export default function ChatBox({
 
       {/* Área de Input */}
       <div className="flex flex-col border-t border-zinc-800 bg-zinc-950">
+        {/* Barra de Progresso durante Compressão / Upload */}
+        {(isCompressing || uploading) && (
+          <div className="w-full px-4 py-2 bg-zinc-900/95 border-b border-emerald-500/20 text-xs font-mono space-y-1">
+            <div className="flex items-center justify-between text-[11px] text-emerald-400">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                {isCompressing ? 'Otimizando e comprimindo imagem...' : 'Enviando imagem ao storage...'}
+              </span>
+              <span>{compressionProgress}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-200"
+                style={{ width: `${compressionProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         {replyingTo && (
           <div className="flex items-center justify-between px-4 py-2 bg-zinc-900/90 border-b border-zinc-800 text-xs text-zinc-300">
             <div className="flex items-center gap-2 truncate">
@@ -755,7 +932,7 @@ export default function ChatBox({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={isInputDisabled || uploading}
-            className="p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             title={isInputDisabled ? "Envio desativado para seu cargo" : "Enviar Imagem (Comprimida client-side)"}
           >
             {uploading ? '⏳' : '📷'}
@@ -773,21 +950,32 @@ export default function ChatBox({
                 ? "Modo apenas visualização (View)."
                 : replyingTo
                 ? "Digite sua resposta..."
-                : "Digite sua mensagem... (Markdown suportado)"
+                : "Digite sua mensagem... (Arraste imagens ou use Markdown)"
             }
-            className="flex-1 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[42px] max-h-28 overflow-y-auto disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[44px] max-h-28 overflow-y-auto disabled:opacity-40 disabled:cursor-not-allowed text-xs sm:text-sm"
             rows="1"
           />
 
           <Button
             type="submit"
             disabled={isInputDisabled || !input.trim()}
-            className="disabled:opacity-40 disabled:cursor-not-allowed"
+            className="min-h-[44px] min-w-[70px] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {sending ? '...' : 'Enviar'}
           </Button>
         </form>
       </div>
+
+      {/* Overlay de Drag-and-Drop de Imagens */}
+      {isDraggingOver && (
+        <div className="absolute inset-0 z-40 bg-black/85 backdrop-blur-sm border-2 border-dashed border-emerald-400 rounded-2xl flex flex-col items-center justify-center gap-3 pointer-events-none">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 flex items-center justify-center text-3xl text-emerald-400 border border-emerald-500/40 animate-pulse">
+            📷
+          </div>
+          <p className="text-emerald-300 font-mono text-sm font-bold">Solte a imagem para comprimir e enviar</p>
+          <p className="text-zinc-400 font-mono text-xs">A compressão client-side será iniciada imediatamente</p>
+        </div>
+      )}
 
       {/* Drawer de Moderação */}
       <ModerationDrawer
@@ -824,6 +1012,39 @@ export default function ChatBox({
           </div>
         </div>
       )}
+
+      {/* Container de Toasts Modernos */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto p-3.5 rounded-xl border shadow-2xl backdrop-blur-md font-mono text-xs flex items-start gap-2.5 animate-in slide-in-from-top-2 fade-in duration-200 ${
+              toast.type === 'error'
+                ? 'bg-rose-950/90 border-rose-500/40 text-rose-200'
+                : toast.type === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-200'
+                : toast.type === 'warning'
+                ? 'bg-amber-950/90 border-amber-500/40 text-amber-200'
+                : 'bg-zinc-900/90 border-zinc-700/60 text-zinc-200'
+            }`}
+          >
+            <span className="text-sm">
+              {toast.type === 'error' && '❌'}
+              {toast.type === 'success' && '✅'}
+              {toast.type === 'warning' && '⚠️'}
+              {toast.type === 'info' && 'ℹ️'}
+            </span>
+            <span className="flex-1 leading-snug">{toast.message}</span>
+            <button
+              type="button"
+              onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+              className="text-zinc-400 hover:text-zinc-100 p-0.5 text-xs cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
