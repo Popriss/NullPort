@@ -39,9 +39,27 @@ export default function ChatBox({
   const [isUserMuted, setIsUserMuted] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
   const [menuPlacement, setMenuPlacement] = useState('up'); // 'up' | 'down'
+  const [highlightedMessageId, setHighlightedMessageId] = useState(null);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  const handleScrollToMessage = (targetId) => {
+    if (!targetId) return;
+
+    const element = document.getElementById(`msg-${targetId}`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Ativa o destaque temporário
+      setHighlightedMessageId(targetId);
+
+      // Remove o destaque após 1.8 segundos
+      setTimeout(() => {
+        setHighlightedMessageId((current) => (current === targetId ? null : current));
+      }, 1800);
+    }
+  };
 
   // Fechar menu contextual ao clicar fora
   useEffect(() => {
@@ -347,6 +365,7 @@ export default function ChatBox({
 
             return (
               <div
+                id={`msg-${msg.id}`}
                 key={msg.id}
                 className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'} ${
                   isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'
@@ -381,19 +400,30 @@ export default function ChatBox({
                 >
                   {/* Balão da Mensagem */}
                   <div
-                    className={`rounded-2xl px-4 py-2.5 text-sm relative shadow-md ${
-                      isMe
+                    className={`rounded-2xl px-4 py-2.5 text-sm relative shadow-md transition-all duration-500 ${
+                      highlightedMessageId === msg.id
+                        ? 'ring-2 ring-emerald-400 bg-emerald-950/40 shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                        : isMe
                         ? 'bg-emerald-600 text-white rounded-br-xs'
                         : 'bg-zinc-800 text-zinc-100 rounded-bl-xs border border-zinc-700/60'
                     }`}
                   >
                     {/* Citação / Resposta */}
-                    {mensagemOriginal && (
-                      <div className="mb-2 p-2 rounded bg-black/25 border-l-2 border-emerald-400 text-xs text-zinc-300">
+                    {msg.reply_to_id && (
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleScrollToMessage(msg.reply_to_id);
+                        }}
+                        className="mb-2 p-2 rounded bg-black/25 border-l-2 border-emerald-400 text-xs text-zinc-300 cursor-pointer hover:bg-black/40 hover:border-emerald-300 transition-colors select-none"
+                        title="Ir para a mensagem original"
+                      >
                         <span className="font-semibold block text-emerald-300">
-                          {mensagemOriginal.autor_nickname}
+                          {mensagemOriginal ? mensagemOriginal.autor_nickname : 'Mensagem'}
                         </span>
-                        <p className="truncate">{mensagemOriginal.conteudo}</p>
+                        <p className="truncate line-clamp-1">
+                          {mensagemOriginal ? mensagemOriginal.conteudo : 'Ver mensagem original...'}
+                        </p>
                       </div>
                     )}
 
