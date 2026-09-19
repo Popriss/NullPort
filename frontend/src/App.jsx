@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import LoginForm from './features/LoginForm';
 import ChatBox from './features/ChatBox';
 import RoomTreeSidebar from './features/RoomTreeSidebar';
+import GalaxyCanvas from './components/GalaxyCanvas';
 import { getCurrentUser, getMe, logout } from './services/auth';
 import { fetchRooms, fetchMyRooms, createRoom, createSubroom } from './services/chat';
 
@@ -85,47 +86,51 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-zinc-400 text-xs">
+      <div className="min-h-screen flex items-center justify-center bg-[#050a08] text-zinc-400 text-xs">
         <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping mr-3"></span>
         Iniciando NullPort...
       </div>
     );
   }
 
-  return (
-    <main className="min-h-screen flex bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-950 text-zinc-100 font-sans">
-      {!user ? (
-        <div className="flex-1 flex flex-col justify-center items-center p-4">
-          <LoginForm onLoginSuccess={handleLoginSuccess} />
-        </div>
-      ) : (
-        <div className="flex-1 flex overflow-hidden">
-          {/* Sidebar Hierárquica em Árvore */}
-          <RoomTreeSidebar
-            rooms={rooms}
-            activeRoom={activeRoom}
-            onSelectRoom={(room) => {
-              setActiveRoom(room);
-              setIsSidebarOpen(false);
-            }}
-            onCreateRoom={handleCreateRoom}
-            onCreateSubroom={handleCreateSubroom}
-            user={user}
-            isOpen={isSidebarOpen}
-            onClose={() => setIsSidebarOpen(false)}
-          />
+  // Se não estiver logado, exibe a Login Page Split-Screen completa
+  if (!user) {
+    return <LoginForm onLoginSuccess={handleLoginSuccess} />;
+  }
 
-          {/* Área Principal de Chat */}
-          <div className="flex-1 flex flex-col justify-center items-center p-2 md:p-6 overflow-hidden">
-            <ChatBox
-              user={user}
-              activeRoom={activeRoom}
-              onLogout={handleLogout}
-              onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-            />
-          </div>
+  return (
+    <main className="min-h-screen flex relative bg-[#050a08] text-zinc-100 font-sans overflow-hidden">
+      {/* Background de Ambiência no Chat (Ambient Overlay com 700 partículas e opacidade 0.35) */}
+      <div className="fixed inset-0 -z-10 pointer-events-none">
+        <GalaxyCanvas particleCount={700} interactive={false} opacity={0.35} />
+      </div>
+
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar Hierárquica em Árvore */}
+        <RoomTreeSidebar
+          rooms={rooms}
+          activeRoom={activeRoom}
+          onSelectRoom={(room) => {
+            setActiveRoom(room);
+            setIsSidebarOpen(false);
+          }}
+          onCreateRoom={handleCreateRoom}
+          onCreateSubroom={handleCreateSubroom}
+          user={user}
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+        />
+
+        {/* Área Principal de Chat */}
+        <div className="flex-1 flex flex-col justify-center items-center p-2 md:p-6 overflow-hidden">
+          <ChatBox
+            user={user}
+            activeRoom={activeRoom}
+            onLogout={handleLogout}
+            onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          />
         </div>
-      )}
+      </div>
     </main>
   );
 }

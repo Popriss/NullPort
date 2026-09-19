@@ -235,9 +235,9 @@ export default function ChatBox({
   const isInputDisabled = isUserMuted || userRole === 'view' || sending;
 
   return (
-    <div className="flex flex-col h-[88vh] w-full max-w-5xl mx-auto bg-zinc-900/90 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-md">
+    <div className="flex flex-col h-[88vh] w-full max-w-5xl mx-auto bg-zinc-950/80 backdrop-blur-md border border-zinc-800/80 rounded-2xl shadow-2xl overflow-hidden">
       {/* Header do Chat */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md">
         <div className="flex items-center gap-3">
           {onToggleSidebar && (
             <button
@@ -475,7 +475,7 @@ export default function ChatBox({
       )}
 
       {/* Área de Input */}
-      <div className="flex flex-col border-t border-zinc-800 bg-zinc-950/70">
+      <div className="flex flex-col border-t border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md">
         {replyingTo && (
           <div className="flex items-center justify-between px-4 py-2 bg-zinc-900/90 border-b border-zinc-800 text-xs text-zinc-300">
             <div className="flex items-center gap-2 truncate">
