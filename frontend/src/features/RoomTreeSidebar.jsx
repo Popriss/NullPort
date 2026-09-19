@@ -243,7 +243,7 @@ export default function RoomTreeSidebar({
   return (
     <>
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 bg-zinc-950/95 border-r border-zinc-800 p-4 flex flex-col justify-between transition-transform duration-300 backdrop-blur-md md:static md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-zinc-950/95 border-r border-zinc-800 p-4 flex flex-col justify-between transition-transform duration-300 backdrop-blur-md md:static md:translate-x-0 gpu-layer will-change-transform ${
           isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         }`}
       >
@@ -297,7 +297,7 @@ export default function RoomTreeSidebar({
       {/* Modal de Criação / Acesso de Sala */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl">
+          <div className="w-full max-w-sm rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl gpu-layer">
             {/* Seletor de Modo (Apenas para salas raiz) */}
             {!modalParentId && (
               <div className="flex rounded-xl bg-zinc-950 p-1 border border-zinc-800 mb-4">
@@ -501,10 +501,10 @@ export default function RoomTreeSidebar({
         </div>
       )}
 
-      {/* Modal de Senha para Sala Privada */}
+      {/* Modal de Confirmação de Senha para Sala Privada */}
       {passwordModalRoom && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative gpu-layer">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <span>🔒</span>

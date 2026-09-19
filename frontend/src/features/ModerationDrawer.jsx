@@ -24,7 +24,7 @@ export default function ModerationDrawer({
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-black/60 backdrop-blur-xs flex justify-end">
-      <div className="w-full max-w-sm bg-zinc-900 border-l border-zinc-800 p-6 flex flex-col justify-between shadow-2xl animate-in slide-in-from-right duration-200">
+      <div className="w-full max-w-sm bg-zinc-900 border-l border-zinc-800 p-6 flex flex-col justify-between shadow-2xl animate-in slide-in-from-right duration-200 gpu-layer will-change-transform">
         <div>
           {/* Header */}
           <div className="flex items-center justify-between pb-4 border-b border-zinc-800">

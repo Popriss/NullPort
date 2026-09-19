@@ -47,11 +47,18 @@ export default function GalaxyCanvas({
     };
 
     // Atualiza dimensões físicas do Canvas
+    // Atualiza dimensões físicas do Canvas com suporte estrito a HiDPI / Retina (nitidez cristalina)
     const resizeCanvas = () => {
       if (!container || !canvas) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2); // Limita a 2x para equilibrar nitidez e consumo
       const rect = container.getBoundingClientRect();
-      width = canvas.width = rect.width || container.clientWidth || 400;
-      height = canvas.height = rect.height || container.clientHeight || 400;
+      width = rect.width || container.clientWidth || 400;
+      height = rect.height || container.clientHeight || 400;
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.scale(dpr, dpr);
     };
     resizeCanvas();
 
@@ -111,6 +118,7 @@ export default function GalaxyCanvas({
         z,
         baseZ: z,
         color: colorObj,
+        colorRgb: `${colorObj.r}, ${colorObj.g}, ${colorObj.b}`,
         baseSize: size,
         speed: orbitalSpeed,
         alpha: Math.random() * 0.65 + 0.35,
@@ -148,17 +156,22 @@ export default function GalaxyCanvas({
       mouse.targetTiltY = 0;
     };
 
-    container.addEventListener('mousemove', handleMouseMove);
-    container.addEventListener('mouseleave', handleMouseLeave);
+    container.addEventListener('mousemove', handleMouseMove, { passive: true });
+    container.addEventListener('mouseleave', handleMouseLeave, { passive: true });
 
     // Eco-Mode: Pausa a renderização quando a aba do navegador perde visibilidade
     const handleVisibilityChange = () => {
       if (document.hidden) {
         isPaused = true;
-        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        if (animationFrameId) {
+          cancelAnimationFrame(animationFrameId);
+          animationFrameId = null;
+        }
       } else {
-        isPaused = false;
-        renderLoop();
+        if (isPaused) {
+          isPaused = false;
+          animationFrameId = requestAnimationFrame(renderLoop);
+        }
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -169,16 +182,23 @@ export default function GalaxyCanvas({
     });
     resizeObserver.observe(container);
 
-    // Loop de Renderização 60 FPS
+    // Constantes pré-calculadas para eliminação de overhead no loop
+    const interactionRadius = 150;
+    const interactionRadiusSq = 22500; // 150 * 150
+    const repelRadiusSq = 3025; // 55 * 55
+    const invInteractionRadius = 1 / 150;
+    const TWO_PI = Math.PI * 2;
+
+    // Loop de Renderização 60/120 FPS
     const renderLoop = () => {
-      if (isPaused) return;
+      if (isPaused || document.hidden) return;
 
       // Limpeza com fundo escuro profundo #050a08
       ctx.fillStyle = '#050a08';
       ctx.fillRect(0, 0, width, height);
 
-      const centerX = width / 2;
-      const centerY = height / 2;
+      const centerX = width * 0.5;
+      const centerY = height * 0.5;
 
       // Interpolação suave de tilt da câmera (amortecimento elástico)
       mouse.currentTiltX += (mouse.targetTiltX - mouse.currentTiltX) * 0.05;
@@ -190,6 +210,9 @@ export default function GalaxyCanvas({
       // Rotação contínua da galáxia
       galaxyRotation += 0.0012;
 
+      // OTIMIZAÇÃO CRÍTICA: pré-calcula trigonométricas da galáxia e da câmera FORA do loop das partículas!
+      const rotCos = Math.cos(galaxyRotation);
+      const rotSin = Math.sin(galaxyRotation);
       const cosX = Math.cos(tiltX);
       const sinX = Math.sin(tiltX);
       const cosY = Math.cos(tiltY);
@@ -198,6 +221,10 @@ export default function GalaxyCanvas({
       // Renderiza as partículas com mesclagem aditiva sutil
       ctx.globalCompositeOperation = 'lighter';
 
+      const isMouseActive = interactive && mouse.active;
+      const mouseX = mouse.x;
+      const mouseY = mouse.y;
+
       for (let i = 0; i < actualParticleCount; i++) {
         const p = particles[i];
 
@@ -205,12 +232,12 @@ export default function GalaxyCanvas({
         p.theta += p.speed;
 
         // Posição local 3D no disco da galáxia
-        let lx = Math.cos(p.theta) * p.r;
-        let ly = Math.sin(p.theta) * p.r;
-        let lz = p.z;
+        const lx = Math.cos(p.theta) * p.r;
+        const ly = Math.sin(p.theta) * p.r;
+        const lz = p.z;
 
         // Efeito de física com mouse (Atração e Repulsão)
-        if (interactive && mouse.active) {
+        if (isMouseActive) {
           // Amortecimento do deslocamento físico
           p.vx *= 0.90;
           p.vy *= 0.90;
@@ -221,9 +248,7 @@ export default function GalaxyCanvas({
           p.dy *= 0.92;
         }
 
-        // Rotação galáctica no plano Z
-        const rotCos = Math.cos(galaxyRotation);
-        const rotSin = Math.sin(galaxyRotation);
+        // Rotação galáctica no plano Z (utilizando rotCos e rotSin pré-computados)
         const rx = lx * rotCos - ly * rotSin + p.dx;
         const ry = lx * rotSin + ly * rotCos + p.dy;
         const rz = lz;
@@ -246,31 +271,36 @@ export default function GalaxyCanvas({
         const screenX = centerX + x3D * scale;
         const screenY = centerY + y3D * scale;
 
-        // Interação de Mouse: Atração e Repulsão em tempo real
-        if (interactive && mouse.active) {
-          const distX = screenX - mouse.x;
-          const distY = screenY - mouse.y;
-          const dist = Math.hypot(distX, distY);
+        // Interação de Mouse ultra-otimizada: verificação estrita por distâncias ao quadrado
+        if (isMouseActive) {
+          const distX = screenX - mouseX;
+          const distY = screenY - mouseY;
+          const distSq = distX * distX + distY * distY;
 
-          const interactionRadius = 150;
-          if (dist < interactionRadius && dist > 1) {
-            const forceNorm = (interactionRadius - dist) / interactionRadius;
+          // Evita Math.sqrt em 99% das partículas fora do raio de 150px
+          if (distSq < interactionRadiusSq && distSq > 1) {
+            const dist = Math.sqrt(distSq);
+            const forceNorm = (interactionRadius - dist) * invInteractionRadius;
+            const invDist = 1 / dist;
+            const normX = distX * invDist;
+            const normY = distY * invDist;
 
-            if (dist < 55) {
+            if (distSq < repelRadiusSq) {
               // Repulsão rápida no núcleo do cursor
               const repelForce = forceNorm * 4.2;
-              p.vx += (distX / dist) * repelForce;
-              p.vy += (distY / dist) * repelForce;
+              p.vx += normX * repelForce;
+              p.vy += normY * repelForce;
             } else {
               // Atração gravitacional suave no anel médio
               const attractForce = forceNorm * 1.5;
-              p.vx -= (distX / dist) * attractForce;
-              p.vy -= (distY / dist) * attractForce;
+              p.vx -= normX * attractForce;
+              p.vy -= normY * attractForce;
             }
 
             // Turbulência tangencial suave (redemoinho ao redor do mouse)
-            p.vx += (-distY / dist) * 0.8 * forceNorm;
-            p.vy += (distX / dist) * 0.8 * forceNorm;
+            const swirlForce = 0.8 * forceNorm;
+            p.vx -= normY * swirlForce;
+            p.vy += normX * swirlForce;
           }
         }
 
@@ -281,8 +311,8 @@ export default function GalaxyCanvas({
 
         // Desenha partícula
         ctx.beginPath();
-        ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${p.color.r}, ${p.color.g}, ${p.color.b}, ${finalAlpha})`;
+        ctx.arc(screenX, screenY, radius, 0, TWO_PI);
+        ctx.fillStyle = `rgba(${p.colorRgb}, ${finalAlpha})`;
         ctx.fill();
       }
 
@@ -295,6 +325,7 @@ export default function GalaxyCanvas({
 
     // Limpeza rigorosa no desmonte do componente (Zero memory leaks)
     return () => {
+      isPaused = true;
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
       container.removeEventListener('mousemove', handleMouseMove);
       container.removeEventListener('mouseleave', handleMouseLeave);

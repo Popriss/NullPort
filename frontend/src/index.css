@@ -2,12 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 body {
   margin: 0;
   background-color: #050a08;
   color: #f4f4f5;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Camadas promovidas por hardware e utilitários GPU */
+.gpu-layer {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.will-change-transform {
+  will-change: transform;
+}
+
+/* Otimização de renderização de listas longas sem jank */
+.message-item-contain {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 48px;
 }
 
 /* Scrollbar fina, escura e integrada ao tema */
@@ -33,4 +55,14 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: #27272a #09090b;
+}
+
+/* Acessibilidade: Respeita preferências de redução de movimento */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

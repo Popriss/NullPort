@@ -43,6 +43,21 @@ export default function ChatBox({
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const isInitialLoadRef = useRef(true);
+  const scrollRafRef = useRef(null);
+
+  // Scroll suave não-bloqueante throttled com requestAnimationFrame
+  const scrollToBottom = (smooth = true) => {
+    if (scrollRafRef.current) {
+      cancelAnimationFrame(scrollRafRef.current);
+    }
+    scrollRafRef.current = requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({
+        behavior: smooth ? 'smooth' : 'auto',
+        block: 'end'
+      });
+    });
+  };
 
   const handleScrollToMessage = (targetId) => {
     if (!targetId) return;
@@ -182,9 +197,26 @@ export default function ChatBox({
     };
   }, [roomId, activeRoom]);
 
+  // Scroll automático throttled e não-bloqueante
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messages.length === 0) return;
+
+    if (isInitialLoadRef.current) {
+      scrollToBottom(false);
+      isInitialLoadRef.current = false;
+    } else {
+      scrollToBottom(true);
+    }
+
+    return () => {
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+    };
   }, [messages]);
+
+  // Ao mudar de sala, prepara o carregamento inicial instantâneo
+  useEffect(() => {
+    isInitialLoadRef.current = true;
+  }, [roomId]);
 
   // Envio de mensagem
   const handleSend = async (e) => {
@@ -367,7 +399,7 @@ export default function ChatBox({
               <div
                 id={`msg-${msg.id}`}
                 key={msg.id}
-                className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'} ${
+                className={`flex flex-col group relative message-item-contain ${isMe ? 'items-end' : 'items-start'} ${
                   isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'
                 }`}
               >
@@ -400,9 +432,9 @@ export default function ChatBox({
                 >
                   {/* Balão da Mensagem */}
                   <div
-                    className={`rounded-2xl px-4 py-2.5 text-sm relative shadow-md transition-all duration-500 ${
+                    className={`rounded-2xl px-4 py-2.5 text-sm relative shadow-md transition-all duration-700 gpu-layer ${
                       highlightedMessageId === msg.id
-                        ? 'ring-2 ring-emerald-400 bg-emerald-950/40 shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                        ? 'ring-2 ring-emerald-400 bg-emerald-950/40 shadow-[0_0_25px_rgba(16,185,129,0.35)]'
                         : isMe
                         ? 'bg-emerald-600 text-white rounded-br-xs'
                         : 'bg-zinc-800 text-zinc-100 rounded-bl-xs border border-zinc-700/60'
@@ -482,7 +514,7 @@ export default function ChatBox({
                               key={emoji}
                               onClick={() => handleReaction(msg.id, emoji)}
                               title={usuarios.join(', ')}
-                              className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                              className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border active:scale-90 transition-transform duration-75 cursor-pointer gpu-layer ${
                                 usuarioReagiu
                                   ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
                                   : 'bg-zinc-900/60 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
@@ -501,7 +533,7 @@ export default function ChatBox({
                   <div className="relative flex items-center">
                     <button
                       onClick={(e) => handleToggleMenu(e, msg.id)}
-                      className="opacity-0 max-sm:opacity-70 group-hover/msg:opacity-100 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 transition-all cursor-pointer"
+                      className="opacity-0 max-sm:opacity-70 group-hover/msg:opacity-100 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 active:scale-95 transition-all duration-120 cursor-pointer gpu-layer"
                       title="Mais opções"
                     >
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -513,7 +545,7 @@ export default function ChatBox({
                     {activeMenuId === msg.id && (
                       <div
                         onClick={(e) => e.stopPropagation()}
-                        className={`absolute z-50 bg-zinc-950/95 border border-zinc-800 rounded-xl shadow-2xl p-2 min-w-[170px] backdrop-blur-md animate-in fade-in zoom-in-95 duration-100 ${
+                        className={`absolute z-50 bg-zinc-950/95 border border-zinc-800 rounded-xl shadow-2xl p-2 min-w-[170px] backdrop-blur-md animate-in fade-in zoom-in-95 duration-120 gpu-layer will-change-transform ${
                           isMe ? 'right-0' : 'left-0'
                         } ${
                           menuPlacement === 'up'
@@ -530,7 +562,7 @@ export default function ChatBox({
                                 handleReaction(msg.id, emoji);
                                 setActiveMenuId(null);
                               }}
-                              className="hover:scale-125 transition-transform text-sm cursor-pointer p-1"
+                              className="hover:scale-125 active:scale-90 transition-transform duration-75 text-sm cursor-pointer p-1"
                               title={`Reagir com ${emoji}`}
                             >
                               {emoji}
@@ -673,7 +705,7 @@ export default function ChatBox({
       {/* Lightbox / Imagem Ampliada */}
       {imagemAmpliada && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 cursor-zoom-out"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 cursor-zoom-out gpu-layer"
           onClick={() => setImagemAmpliada(null)}
         >
           <div className="relative max-w-5xl max-h-[90vh]">
