@@ -26,10 +26,17 @@ body {
   will-change: transform;
 }
 
+/* Container de scroll desacoplado na GPU */
+.will-change-scroll {
+  will-change: scroll-position;
+  transform: translateZ(0);
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Otimização de renderização de listas longas sem jank */
 .message-item-contain {
   content-visibility: auto;
-  contain-intrinsic-size: 0 48px;
+  contain-intrinsic-size: 0 54px;
 }
 
 /* Scrollbar fina, escura e integrada ao tema */

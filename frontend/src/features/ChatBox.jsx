@@ -321,9 +321,9 @@ export default function ChatBox({
   const isInputDisabled = isUserMuted || userRole === 'view' || sending;
 
   return (
-    <div className="flex flex-col h-[88vh] w-full max-w-5xl mx-auto bg-zinc-950/80 backdrop-blur-md border border-zinc-800/80 rounded-2xl shadow-2xl overflow-hidden">
+    <div className="flex flex-col h-[88vh] w-full max-w-5xl mx-auto bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
       {/* Header do Chat */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-zinc-800 bg-zinc-950">
         <div className="flex items-center gap-3">
           {onToggleSidebar && (
             <button
@@ -374,7 +374,7 @@ export default function ChatBox({
       </div>
 
       {/* Lista de Mensagens */}
-      <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2 custom-scrollbar will-change-scroll [transform:translateZ(0)]">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-xs py-12">
             <span className="text-3xl mb-2">💬</span>
@@ -399,9 +399,9 @@ export default function ChatBox({
               <div
                 id={`msg-${msg.id}`}
                 key={msg.id}
-                className={`flex flex-col group relative message-item-contain ${isMe ? 'items-end' : 'items-start'} ${
-                  isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'
-                }`}
+                className={`flex flex-col group relative message-item-contain [content-visibility:auto] [contain-intrinsic-size:0_54px] ${
+                  isMe ? 'items-end' : 'items-start'
+                } ${isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'}`}
               >
                 {/* Nome do autor com Badges de cargo (apenas se não for consecutiva) */}
                 {!isConsecutive && (
@@ -426,13 +426,13 @@ export default function ChatBox({
 
                 {/* Linha do Balão com Botão de Ações (...) */}
                 <div
-                  className={`relative flex items-center gap-1.5 group/msg max-w-[85%] ${
+                  className={`relative flex items-center gap-1.5 group/msg max-w-[85%] sm:max-w-[75%] ${
                     isMe ? 'flex-row-reverse' : 'flex-row'
                   }`}
                 >
                   {/* Balão da Mensagem */}
                   <div
-                    className={`rounded-2xl px-4 py-2.5 text-sm relative shadow-md transition-all duration-700 gpu-layer ${
+                    className={`rounded-2xl p-3.5 text-sm relative shadow-md overflow-hidden transition-all duration-700 gpu-layer max-w-full ${
                       highlightedMessageId === msg.id
                         ? 'ring-2 ring-emerald-400 bg-emerald-950/40 shadow-[0_0_25px_rgba(16,185,129,0.35)]'
                         : isMe
@@ -467,11 +467,22 @@ export default function ChatBox({
                         onClick={() => setImagemAmpliada(msg.conteudo.trim())}
                       />
                     ) : (
-                      <div className="text-sm break-words whitespace-pre-wrap">
+                      <div className="text-sm break-words whitespace-pre-wrap max-w-full overflow-hidden">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           rehypePlugins={[rehypeSanitize]}
                           components={{
+                            pre: ({ node, ...props }) => (
+                              <div className="w-full my-1 rounded-xl bg-black/60 border border-black/40 overflow-hidden max-w-full">
+                                <pre className="p-3 text-xs leading-relaxed font-mono overflow-x-auto text-zinc-200 custom-scrollbar" {...props} />
+                              </div>
+                            ),
+                            code: ({ node, inline, ...props }) =>
+                              inline ? (
+                                <code className="px-1.5 py-0.5 rounded bg-black/40 text-emerald-200 font-mono text-xs" {...props} />
+                              ) : (
+                                <code {...props} />
+                              ),
                             img: ({ node, ...props }) => (
                               <img
                                 {...props}
@@ -489,14 +500,6 @@ export default function ChatBox({
                                 {...props}
                               />
                             ),
-                            code: ({ node, inline, ...props }) =>
-                              inline ? (
-                                <code className="bg-black/30 px-1.5 py-0.5 rounded text-emerald-300 font-mono text-[13px]" {...props} />
-                              ) : (
-                                <pre className="bg-black/40 p-3 rounded-md overflow-x-auto my-2 border border-zinc-700/50">
-                                  <code className="font-mono text-[13px] text-zinc-200" {...props} />
-                                </pre>
-                              ),
                           }}
                         >
                           {msg.conteudo}
@@ -545,7 +548,7 @@ export default function ChatBox({
                     {activeMenuId === msg.id && (
                       <div
                         onClick={(e) => e.stopPropagation()}
-                        className={`absolute z-50 bg-zinc-950/95 border border-zinc-800 rounded-xl shadow-2xl p-2 min-w-[170px] backdrop-blur-md animate-in fade-in zoom-in-95 duration-120 gpu-layer will-change-transform ${
+                        className={`absolute z-50 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl p-2 min-w-[170px] animate-in fade-in zoom-in-95 duration-120 gpu-layer will-change-transform ${
                           isMe ? 'right-0' : 'left-0'
                         } ${
                           menuPlacement === 'up'
@@ -628,7 +631,7 @@ export default function ChatBox({
       )}
 
       {/* Área de Input */}
-      <div className="flex flex-col border-t border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md">
+      <div className="flex flex-col border-t border-zinc-800 bg-zinc-950">
         {replyingTo && (
           <div className="flex items-center justify-between px-4 py-2 bg-zinc-900/90 border-b border-zinc-800 text-xs text-zinc-300">
             <div className="flex items-center gap-2 truncate">
