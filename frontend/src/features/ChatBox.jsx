@@ -394,12 +394,17 @@ export default function ChatBox({
             const mensagemOriginal = msg.reply_to_id
               ? messages.find((m) => m.id === msg.reply_to_id)
               : null;
+            const isMenuActive = activeMenuId === msg.id;
 
             return (
               <div
                 id={`msg-${msg.id}`}
                 key={msg.id}
-                className={`flex flex-col group relative message-item-contain [content-visibility:auto] [contain-intrinsic-size:0_54px] ${
+                className={`flex flex-col group relative ${
+                  isMenuActive
+                    ? 'z-50'
+                    : 'z-0 message-item-contain [content-visibility:auto] [contain-intrinsic-size:0_54px]'
+                } ${
                   isMe ? 'items-end' : 'items-start'
                 } ${isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'}`}
               >
@@ -426,9 +431,9 @@ export default function ChatBox({
 
                 {/* Linha do Balão com Botão de Ações (...) */}
                 <div
-                  className={`relative flex items-center gap-1.5 group/msg max-w-[85%] sm:max-w-[75%] ${
+                  className={`relative flex items-center gap-1.5 group/msg max-w-[85%] sm:max-w-[75%] overflow-visible ${
                     isMe ? 'flex-row-reverse' : 'flex-row'
-                  }`}
+                  } ${isMenuActive ? 'z-50' : 'z-10'}`}
                 >
                   {/* Balão da Mensagem */}
                   <div
@@ -533,7 +538,7 @@ export default function ChatBox({
                   </div>
 
                   {/* Botão de Gatilho '...' com Dropdown Popover */}
-                  <div className="relative flex items-center">
+                  <div className="relative flex items-center overflow-visible">
                     <button
                       onClick={(e) => handleToggleMenu(e, msg.id)}
                       className="opacity-0 max-sm:opacity-70 group-hover/msg:opacity-100 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 active:scale-95 transition-all duration-120 cursor-pointer gpu-layer"
