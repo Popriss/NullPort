@@ -65,6 +65,31 @@ def list_available_rooms(
     return salas
 
 
+@router.get("/my-rooms", response_model=List[RoomOut])
+def list_my_rooms(
+    auth: dict = Depends(get_user_or_room_auth),
+    db: Session = Depends(get_db)
+):
+    """Lista apenas as salas onde o usuário autenticado é membro (compatível com tokens legados/guest)."""
+    user_id = auth.get("user_id") or auth.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Identificador de usuário ausente no token.")
+
+    try:
+        user_uuid = UUID(str(user_id))
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Formato de ID de usuário inválido.")
+
+    membro_sala_ids = [
+        m.sala_id for m in db.query(MembroSala).filter(MembroSala.usuario_id == user_uuid).all()
+    ]
+    if not membro_sala_ids:
+        return []
+
+    salas = db.query(Sala).filter(Sala.id.in_(membro_sala_ids)).order_by(Sala.created_at.desc()).all()
+    return salas
+
+
 @router.post("/rooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
 def create_room(
     req: RoomCreate,

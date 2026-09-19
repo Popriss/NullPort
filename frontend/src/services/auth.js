@@ -54,6 +54,8 @@ export async function enterRoom({ nome_url, senha, nickname }) {
     localStorage.setItem('token', data.access_token);
     localStorage.setItem('nullport_token', data.access_token);
     localStorage.setItem('nullport_user', JSON.stringify({
+      id: data.user_id,
+      user_id: data.user_id,
       sala_id: data.sala_id,
       nickname: data.nickname,
       nome_url: data.nome_url,

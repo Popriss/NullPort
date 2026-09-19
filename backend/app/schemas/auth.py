@@ -42,6 +42,7 @@ class RoomEnterRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    user_id: str
     sala_id: str
     nickname: str
     nome_url: str

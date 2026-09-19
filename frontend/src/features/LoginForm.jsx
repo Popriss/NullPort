@@ -45,6 +45,8 @@ export default function LoginForm({ onLoginSuccess }) {
           nickname: nickname.trim(),
         });
         onLoginSuccess({
+          id: data.user_id,
+          user_id: data.user_id,
           sala_id: data.sala_id,
           nickname: data.nickname,
           nome_url: data.nome_url,

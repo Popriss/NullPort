@@ -3,7 +3,7 @@ import LoginForm from './features/LoginForm';
 import ChatBox from './features/ChatBox';
 import RoomTreeSidebar from './features/RoomTreeSidebar';
 import { getCurrentUser, getMe, logout } from './services/auth';
-import { fetchRooms, createRoom, createSubroom } from './services/chat';
+import { fetchRooms, fetchMyRooms, createRoom, createSubroom } from './services/chat';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -30,7 +30,13 @@ export default function App() {
   // Carrega salas quando o usuário estiver logado
   const loadRooms = async () => {
     try {
-      const roomsData = await fetchRooms();
+      let roomsData;
+      try {
+        roomsData = await fetchRooms();
+      } catch {
+        // Fallback para token legado/guest que não passa por get_current_user
+        roomsData = await fetchMyRooms();
+      }
       setRooms(roomsData);
       // Se não tiver sala ativa selecionada, seleciona a primeira
       if (roomsData.length > 0 && !activeRoom) {
@@ -42,7 +48,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user && !user.is_legacy_room) {
+    if (user) {
       loadRooms();
     }
   }, [user]);
@@ -95,21 +101,19 @@ export default function App() {
       ) : (
         <div className="flex-1 flex overflow-hidden">
           {/* Sidebar Hierárquica em Árvore */}
-          {!user.is_legacy_room && (
-            <RoomTreeSidebar
-              rooms={rooms}
-              activeRoom={activeRoom}
-              onSelectRoom={(room) => {
-                setActiveRoom(room);
-                setIsSidebarOpen(false);
-              }}
-              onCreateRoom={handleCreateRoom}
-              onCreateSubroom={handleCreateSubroom}
-              user={user}
-              isOpen={isSidebarOpen}
-              onClose={() => setIsSidebarOpen(false)}
-            />
-          )}
+          <RoomTreeSidebar
+            rooms={rooms}
+            activeRoom={activeRoom}
+            onSelectRoom={(room) => {
+              setActiveRoom(room);
+              setIsSidebarOpen(false);
+            }}
+            onCreateRoom={handleCreateRoom}
+            onCreateSubroom={handleCreateSubroom}
+            user={user}
+            isOpen={isSidebarOpen}
+            onClose={() => setIsSidebarOpen(false)}
+          />
 
           {/* Área Principal de Chat */}
           <div className="flex-1 flex flex-col justify-center items-center p-2 md:p-6 overflow-hidden">

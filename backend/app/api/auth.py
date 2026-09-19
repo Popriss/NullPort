@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.core.database import get_db
-from app.models.models import Usuario, Sala
+from app.models.models import Usuario, Sala, MembroSala
 from app.schemas.auth import (
     UserRegisterRequest,
     UserLoginRequest,
@@ -152,11 +152,30 @@ def get_me(payload: dict = Depends(get_current_user_payload), db: Session = Depe
     return user
 
 
-# Compatibilidade legada para acesso direto a salas
+# Helper: garante que o usuário seja membro da sala (tabela pivô membros_sala)
+def ensure_room_membership(db: Session, sala_id: UUID, usuario_id: UUID, role: str = "padrao"):
+    membro = db.query(MembroSala).filter(
+        MembroSala.sala_id == sala_id,
+        MembroSala.usuario_id == usuario_id
+    ).first()
+    if not membro:
+        membro = MembroSala(
+            sala_id=sala_id,
+            usuario_id=usuario_id,
+            role=role,
+            is_muted=False
+        )
+        db.add(membro)
+        db.commit()
+        db.refresh(membro)
+    return membro
+
+
+# Compatibilidade legada para acesso direto a salas (Zero-Login)
 @router.post("/room", response_model=TokenResponse)
 def enter_or_create_room(req: RoomEnterRequest, db: Session = Depends(get_db)):
     room = db.query(Sala).filter(Sala.nome_url == req.nome_url).first()
-    
+
     if room:
         if room.hash_senha and not verify_password(req.senha or "", room.hash_senha):
             raise HTTPException(
@@ -170,17 +189,36 @@ def enter_or_create_room(req: RoomEnterRequest, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(room)
 
+    # Cria/Busca usuário convidado (Guest) para acesso sem login global
+    guest_nick = req.nickname.strip() if req.nickname else f'Anon_{str(uuid4())[:6]}'
+    user = db.query(Usuario).filter(Usuario.nickname == guest_nick).first()
+    if not user:
+        user = Usuario(
+            nickname=guest_nick,
+            email=f'{guest_nick.lower()}@guest.nullport',
+            senha_hash='',
+            is_guest=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    # Garante a vinculação na tabela pivô membros_sala
+    ensure_room_membership(db, room.id, user.id, role='padrao')
+
     token_data = {
-        "sala_id": str(room.id),
-        "nome_url": room.nome_url,
-        "nickname": req.nickname,
+        'sub': str(user.id),
+        'user_id': str(user.id),
+        'sala_id': str(room.id),
+        'nickname': user.nickname
     }
     access_token = create_access_token(token_data)
 
     return TokenResponse(
         access_token=access_token,
-        token_type="bearer",
+        token_type='bearer',
+        user_id=str(user.id),
         sala_id=str(room.id),
-        nickname=req.nickname,
+        nickname=user.nickname,
         nome_url=room.nome_url
     )

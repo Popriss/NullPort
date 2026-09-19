@@ -15,6 +15,7 @@ class Usuario(Base):
     senha_hash = Column(String(255), nullable=False)
     is_site_admin = Column(Boolean, default=False, nullable=False)
     is_muted_global = Column(Boolean, default=False, nullable=False)
+    is_guest = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
 
     # Relacionamentos

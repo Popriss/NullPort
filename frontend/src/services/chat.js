@@ -16,6 +16,15 @@ export async function fetchRooms() {
   return response.json();
 }
 
+export async function fetchMyRooms() {
+  const token = getToken();
+  const res = await fetch(`${API_URL}/api/chat/my-rooms`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error('Erro ao buscar salas.');
+  return res.json();
+}
+
 export async function createRoom(roomData) {
   const token = getToken();
   const response = await fetch(`${API_URL}/api/chat/rooms`, {
