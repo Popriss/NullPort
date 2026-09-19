@@ -38,6 +38,7 @@ export default function ChatBox({
   const [userRole, setUserRole] = useState('padrao');
   const [isUserMuted, setIsUserMuted] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState(null);
+  const [menuPlacement, setMenuPlacement] = useState('up'); // 'up' | 'down'
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -48,6 +49,33 @@ export default function ChatBox({
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
+
+  // Manipulador para posicionamento dinâmico (anti-colisão) do menu contextual
+  const handleToggleMenu = (e, msgId) => {
+    e.stopPropagation();
+
+    if (activeMenuId === msgId) {
+      setActiveMenuId(null);
+      return;
+    }
+
+    const buttonRect = e.currentTarget.getBoundingClientRect();
+    const dropdownHeight = 175; // Altura aproximada do menu com emojis e botões
+
+    // Mede a distância até o topo do container com scroll e o topo da janela
+    const container = e.currentTarget.closest('.overflow-y-auto');
+    const containerTop = container ? container.getBoundingClientRect().top : 0;
+    const spaceAbove = buttonRect.top - containerTop;
+
+    // Se o espaço acima for menor que a altura do menu, abre para baixo ('down'), caso contrário para cima ('up')
+    if (spaceAbove < dropdownHeight || buttonRect.top < dropdownHeight) {
+      setMenuPlacement('down');
+    } else {
+      setMenuPlacement('up');
+    }
+
+    setActiveMenuId(msgId);
+  };
 
   const roomId = activeRoom?.id || user?.sala_id;
   const roomTitle = activeRoom?.titulo || activeRoom?.nome_url || user?.nome_url || 'Chat';
@@ -442,10 +470,7 @@ export default function ChatBox({
                   {/* Botão de Gatilho '...' com Dropdown Popover */}
                   <div className="relative flex items-center">
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveMenuId(activeMenuId === msg.id ? null : msg.id);
-                      }}
+                      onClick={(e) => handleToggleMenu(e, msg.id)}
                       className="opacity-0 max-sm:opacity-70 group-hover/msg:opacity-100 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 transition-all cursor-pointer"
                       title="Mais opções"
                     >
@@ -454,15 +479,17 @@ export default function ChatBox({
                       </svg>
                     </button>
 
-                    {/* Dropdown Menu Suspenso */}
+                    {/* Dropdown Menu Suspenso com Posicionamento Dinâmico */}
                     {activeMenuId === msg.id && (
                       <div
                         onClick={(e) => e.stopPropagation()}
-                        className={`absolute z-50 ${
-                          index > 1 ? 'bottom-full mb-1' : 'top-full mt-1'
-                        } ${
+                        className={`absolute z-50 bg-zinc-950/95 border border-zinc-800 rounded-xl shadow-2xl p-2 min-w-[170px] backdrop-blur-md animate-in fade-in zoom-in-95 duration-100 ${
                           isMe ? 'right-0' : 'left-0'
-                        } bg-zinc-950/95 border border-zinc-800 rounded-xl shadow-2xl p-2 min-w-[165px] backdrop-blur-md animate-in fade-in zoom-in-95 duration-100`}
+                        } ${
+                          menuPlacement === 'up'
+                            ? 'bottom-full mb-2'
+                            : 'top-full mt-2'
+                        }`}
                       >
                         {/* Emojis Rápidos */}
                         <div className="flex items-center justify-between gap-1 px-1 py-1 mb-1">
