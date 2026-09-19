@@ -102,7 +102,36 @@ export async function joinRoomByUrl(nomeUrl, senha = null) {
   return response.json();
 }
 
-// --- Moderação ---
+// --- Moderação & Membros ---
+
+export async function fetchRoomMembers(roomId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/members`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao buscar membros da sala");
+  }
+  return response.json();
+}
+
+export async function updateMemberRole(roomId, userId, role) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/members/${userId}/role`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ role })
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao atualizar cargo do membro");
+  }
+  return response.json();
+}
 
 export async function muteMember(roomId, userId, isMuted) {
   const token = getToken();

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia
 from app.schemas.chat import MessageCreate, MessageOut
-from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, RoomJoinRequest, RoomJoinByUrlRequest
+from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, MemberRoleUpdate, RoomJoinRequest, RoomJoinByUrlRequest
 from app.services.auth import decode_access_token, get_password_hash, verify_password
 from app.services.sse import manager
 from app.services.storage import validate_and_sanitize_image, upload_image_to_r2
@@ -345,10 +345,64 @@ def create_subroom(
     return subroom_out
 
 
-# --- MODERAÇÃO DE CHAT (RBAC LOCAL) ---
+# --- MODERAÇÃO DE CHAT (RBAC LOCAL & PRESENÇA) ---
+
+@router.get("/rooms/{room_id}/members", response_model=List[MemberOut])
+def get_room_members(
+    room_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user)
+):
+    """
+    Lista todos os membros cadastrados na sala com status de presença (is_online).
+    Restrito a membros da sala ou site admins.
+    Ordenação: Admins primeiro, seguido de Mods, Usuários Online e Usuários Offline.
+    """
+    # Validação RBAC: deve pertencer à sala ou ser admin global
+    if not current_user.is_site_admin:
+        membro_solicitante = db.query(MembroSala).filter(
+            MembroSala.sala_id == room_id,
+            MembroSala.usuario_id == current_user.id
+        ).first()
+        if not membro_solicitante:
+            raise HTTPException(status_code=403, detail="Você não pertence a esta sala.")
+
+    membros = (
+        db.query(MembroSala, Usuario)
+        .join(Usuario, MembroSala.usuario_id == Usuario.id)
+        .filter(MembroSala.sala_id == room_id)
+        .all()
+    )
+
+    online_user_ids = manager.get_online_user_ids(str(room_id))
+
+    response = []
+    for membro, usuario in membros:
+        is_online = (str(usuario.id) in online_user_ids) or (usuario.id in online_user_ids)
+        response.append(MemberOut(
+            id=membro.id,
+            sala_id=membro.sala_id,
+            usuario_id=membro.usuario_id,
+            role=membro.role,
+            is_muted=membro.is_muted,
+            nickname=usuario.nickname,
+            is_online=is_online,
+            created_at=membro.created_at
+        ))
+
+    # Ordenação: Admins primeiro, seguido de Mods, Usuários Online e Usuários Offline
+    role_order = {"admin": 0, "mod": 1, "padrao": 2, "view": 3}
+    response.sort(key=lambda m: (
+        role_order.get(m.role, 99),
+        0 if m.is_online else 1,
+        (m.nickname or "").lower()
+    ))
+
+    return response
+
 
 @router.post("/rooms/{room_id}/members/{user_id}/mute", response_model=MemberOut)
-def mute_chat_member(
+async def mute_chat_member(
     room_id: UUID,
     user_id: UUID,
     req: MemberMuteUpdate,
@@ -369,20 +423,78 @@ def mute_chat_member(
     db.refresh(membro)
 
     user_info = db.query(Usuario).filter(Usuario.id == user_id).first()
+    online_user_ids = manager.get_online_user_ids(str(room_id))
+    is_online = (str(user_id) in online_user_ids) or (user_id in online_user_ids)
 
-    return MemberOut(
+    member_out = MemberOut(
         id=membro.id,
         sala_id=membro.sala_id,
         usuario_id=membro.usuario_id,
         role=membro.role,
         is_muted=membro.is_muted,
         nickname=user_info.nickname if user_info else None,
+        is_online=is_online,
         created_at=membro.created_at
     )
 
+    await manager.broadcast_to_room(str(room_id), {
+        "type": "member_update",
+        "member": member_out.model_dump(mode="json")
+    })
+
+    return member_out
+
+
+@router.post("/rooms/{room_id}/members/{user_id}/role", response_model=MemberOut)
+async def update_chat_member_role(
+    room_id: UUID,
+    user_id: UUID,
+    req: MemberRoleUpdate,
+    auth_data: Tuple = Depends(require_chat_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Alterar cargo de um membro da sala (restrito a Admin do Chat ou Site Admin)."""
+    valid_roles = ["admin", "mod", "padrao", "view"]
+    if req.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Cargo inválido. Use um dos seguintes: {', '.join(valid_roles)}")
+
+    membro = db.query(MembroSala).filter(
+        MembroSala.sala_id == room_id,
+        MembroSala.usuario_id == user_id
+    ).first()
+
+    if not membro:
+        raise HTTPException(status_code=404, detail="Membro não encontrado nesta sala.")
+
+    membro.role = req.role
+    db.commit()
+    db.refresh(membro)
+
+    user_info = db.query(Usuario).filter(Usuario.id == user_id).first()
+    online_user_ids = manager.get_online_user_ids(str(room_id))
+    is_online = (str(user_id) in online_user_ids) or (user_id in online_user_ids)
+
+    member_out = MemberOut(
+        id=membro.id,
+        sala_id=membro.sala_id,
+        usuario_id=membro.usuario_id,
+        role=membro.role,
+        is_muted=membro.is_muted,
+        nickname=user_info.nickname if user_info else None,
+        is_online=is_online,
+        created_at=membro.created_at
+    )
+
+    await manager.broadcast_to_room(str(room_id), {
+        "type": "member_update",
+        "member": member_out.model_dump(mode="json")
+    })
+
+    return member_out
+
 
 @router.post("/rooms/{room_id}/members/{user_id}/ban")
-def ban_chat_member(
+async def ban_chat_member(
     room_id: UUID,
     user_id: UUID,
     auth_data: Tuple = Depends(require_chat_role("admin")),
@@ -399,6 +511,12 @@ def ban_chat_member(
 
     db.delete(membro)
     db.commit()
+
+    await manager.broadcast_to_room(str(room_id), {
+        "type": "member_removed",
+        "user_id": str(user_id)
+    })
+
     return {"message": "Membro banido/removido da sala com sucesso."}
 
 
@@ -673,7 +791,7 @@ async def chat_stream(
         if not membro:
             raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
 
-    queue = await manager.connect(str(sala_id))
+    queue = await manager.connect(str(sala_id), user_id=str(user_uuid))
 
     async def event_generator():
         try:

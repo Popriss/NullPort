@@ -8,7 +8,9 @@ import {
   subscribeToMessages,
   reactToMessage,
   muteMember,
-  banMember
+  banMember,
+  fetchRoomMembers,
+  updateMemberRole
 } from '../services/chat';
 import { compressImage } from '../utils/compression';
 import { isImageUrl } from '../utils/regex';
@@ -113,31 +115,45 @@ export default function ChatBox({
   const roomId = activeRoom?.id || user?.sala_id;
   const roomTitle = activeRoom?.titulo || activeRoom?.nome_url || user?.nome_url || 'Chat';
 
+  // Função para buscar membros cadastrados da sala e sincronizar presença
+  const loadRoomMembers = async () => {
+    if (!roomId) return;
+    try {
+      const data = await fetchRoomMembers(roomId);
+      setMembers(data);
+
+      const currentMember = data.find(
+        (m) => m.usuario_id === user?.id || m.id === user?.id || m.nickname === user?.nickname
+      );
+
+      if (user?.is_site_admin) {
+        setUserRole('admin');
+        setIsUserMuted(false);
+      } else if (currentMember) {
+        setUserRole(currentMember.role || 'padrao');
+        setIsUserMuted(currentMember.is_muted || user?.is_muted_global || false);
+      } else {
+        setUserRole(user?.role || 'padrao');
+        setIsUserMuted(user?.is_muted || false);
+      }
+    } catch (err) {
+      console.error("Erro ao carregar membros da sala:", err);
+    }
+  };
+
   // Sincroniza membros e permissões do usuário logado na sala ativa
   useEffect(() => {
     if (user?.is_site_admin) {
       setUserRole('admin');
       setIsUserMuted(false);
-      return;
-    }
-
-    if (user?.is_muted_global) {
+    } else if (user?.is_muted_global) {
       setIsUserMuted(true);
     }
 
-    const currentMember = roomMembers.find(
-      (m) => m.usuario_id === user?.id || m.nickname === user?.nickname
-    );
-
-    if (currentMember) {
-      setUserRole(currentMember.role || 'padrao');
-      setIsUserMuted(currentMember.is_muted || user?.is_muted_global || false);
-    } else {
-      setUserRole(user?.role || 'padrao');
-      setIsUserMuted(user?.is_muted || false);
+    if (roomId) {
+      loadRoomMembers();
     }
-    setMembers(roomMembers);
-  }, [roomMembers, user, activeRoom]);
+  }, [roomId, user]);
 
   // Solicita permissão de notificação push
   useEffect(() => {
@@ -180,6 +196,54 @@ export default function ChatBox({
             m.id === eventData.message_id ? { ...m, reacoes: eventData.reacoes } : m
           )
         );
+        return;
+      }
+
+      // Atualização de presença em tempo real (Online vs Offline)
+      if (eventData.type === "presence_update") {
+        setMembers((prev) =>
+          prev.map((m) =>
+            (m.usuario_id === eventData.user_id || m.id === eventData.user_id)
+              ? { ...m, is_online: eventData.is_online }
+              : m
+          )
+        );
+        return;
+      }
+
+      // Atualização de cargo ou mute de membro
+      if (eventData.type === "member_update") {
+        const updated = eventData.member;
+        setMembers((prev) => {
+          const exists = prev.some((m) => (m.usuario_id === updated.usuario_id || m.id === updated.id));
+          if (exists) {
+            return prev.map((m) =>
+              (m.usuario_id === updated.usuario_id || m.id === updated.id)
+                ? { ...m, ...updated }
+                : m
+            );
+          }
+          return [...prev, updated];
+        });
+
+        if (updated.usuario_id === user?.id || updated.id === user?.id) {
+          if (!user?.is_site_admin) {
+            setUserRole(updated.role || 'padrao');
+            setIsUserMuted(updated.is_muted || false);
+          }
+        }
+        return;
+      }
+
+      // Remoção / Ban de membro
+      if (eventData.type === "member_removed") {
+        setMembers((prev) =>
+          prev.filter((m) => m.usuario_id !== eventData.user_id && m.id !== eventData.user_id)
+        );
+        if (eventData.user_id === user?.id) {
+          alert("Você foi removido desta sala por um administrador.");
+          window.location.reload();
+        }
         return;
       }
 
@@ -290,12 +354,14 @@ export default function ChatBox({
   };
 
   const handleMuteAction = async (targetUserId, shouldMute) => {
-    if (!activeRoom?.id) return;
+    if (!roomId) return;
     try {
-      await muteMember(activeRoom.id, targetUserId, shouldMute);
+      await muteMember(roomId, targetUserId, shouldMute);
       setMembers((prev) =>
         prev.map((m) =>
-          m.usuario_id === targetUserId ? { ...m, is_muted: shouldMute } : m
+          (m.usuario_id === targetUserId || m.id === targetUserId)
+            ? { ...m, is_muted: shouldMute }
+            : m
         )
       );
       if (targetUserId === user?.id) {
@@ -307,13 +373,34 @@ export default function ChatBox({
   };
 
   const handleBanAction = async (targetUserId) => {
-    if (!activeRoom?.id) return;
-    if (!window.confirm("Deseja realmente banir este membro da sala?")) return;
+    if (!roomId) return;
+    if (!window.confirm("Deseja realmente banir/remover este membro da sala?")) return;
     try {
-      await banMember(activeRoom.id, targetUserId);
-      setMembers((prev) => prev.filter((m) => m.usuario_id !== targetUserId));
+      await banMember(roomId, targetUserId);
+      setMembers((prev) =>
+        prev.filter((m) => m.usuario_id !== targetUserId && m.id !== targetUserId)
+      );
     } catch (err) {
       alert(err.message || "Erro ao banir membro.");
+    }
+  };
+
+  const handleRoleAction = async (targetUserId, newRole) => {
+    if (!roomId) return;
+    try {
+      await updateMemberRole(roomId, targetUserId, newRole);
+      setMembers((prev) =>
+        prev.map((m) =>
+          (m.usuario_id === targetUserId || m.id === targetUserId)
+            ? { ...m, role: newRole }
+            : m
+        )
+      );
+      if (targetUserId === user?.id && !user?.is_site_admin) {
+        setUserRole(newRole);
+      }
+    } catch (err) {
+      alert(err.message || "Erro ao alterar cargo do membro.");
     }
   };
 
@@ -359,7 +446,10 @@ export default function ChatBox({
         <div className="flex items-center gap-2">
           {isCanModerate && (
             <button
-              onClick={() => setIsModDrawerOpen(true)}
+              onClick={() => {
+                setIsModDrawerOpen(true);
+                loadRoomMembers();
+              }}
               className="text-xs font-semibold py-1.5 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 transition-all flex items-center gap-1.5"
             >
               <span>🛡️</span>
@@ -706,8 +796,10 @@ export default function ChatBox({
         activeRoom={activeRoom}
         members={members}
         currentUserRole={userRole}
+        currentUserId={user?.id}
         onMuteMember={handleMuteAction}
         onBanMember={handleBanAction}
+        onRoleChange={handleRoleAction}
       />
 
       {/* Lightbox / Imagem Ampliada */}

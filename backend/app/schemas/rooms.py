@@ -44,6 +44,7 @@ class MemberOut(BaseModel):
     role: str
     is_muted: bool
     nickname: Optional[str] = None
+    is_online: Optional[bool] = False
     created_at: datetime
 
     class Config:
