@@ -47,6 +47,10 @@ class Sala(Base):
     mensagens = relationship("Mensagem", back_populates="sala", cascade="all, delete-orphan")
     denuncias = relationship("Denuncia", back_populates="sala", cascade="all, delete-orphan")
 
+    @property
+    def tem_senha(self) -> bool:
+        return bool(self.hash_senha)
+
 
 class MembroSala(Base):
     __tablename__ = "membros_sala"

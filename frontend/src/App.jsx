@@ -39,9 +39,12 @@ export default function App() {
         roomsData = await fetchMyRooms();
       }
       setRooms(roomsData);
-      // Se não tiver sala ativa selecionada, seleciona a primeira
+      // Se não tiver sala ativa selecionada, seleciona a primeira que é membro ou pública sem senha
       if (roomsData.length > 0 && !activeRoom) {
-        setActiveRoom(roomsData[0]);
+        const defaultRoom = roomsData.find((r) => r.is_membro) || roomsData.find((r) => !r.tem_senha) || null;
+        if (defaultRoom) {
+          setActiveRoom(defaultRoom);
+        }
       }
     } catch (err) {
       console.error("Erro ao carregar salas:", err);
@@ -113,6 +116,9 @@ export default function App() {
           onSelectRoom={(room) => {
             setActiveRoom(room);
             setIsSidebarOpen(false);
+            setRooms((prev) =>
+              prev.map((r) => (r.id === room.id ? { ...r, is_membro: true } : r))
+            );
           }}
           onCreateRoom={handleCreateRoom}
           onCreateSubroom={handleCreateSubroom}

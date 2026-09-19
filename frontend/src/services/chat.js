@@ -70,10 +70,13 @@ export async function createSubroom(roomId, data) {
 
 export async function joinRoom(roomId, senha = null) {
   const token = getToken();
-  const url = `${API_URL}/api/chat/rooms/${roomId}/join${senha ? `?senha=${encodeURIComponent(senha)}` : ''}`;
-  const response = await fetch(url, {
+  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/join`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}` }
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ senha: senha || null })
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));

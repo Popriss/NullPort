@@ -12,6 +12,9 @@ class RoomCreate(BaseModel):
     ttl_minutes: Optional[int] = 1440         # Tempo de vida para salas temporárias
     max_membros: Optional[int] = 50
 
+class RoomJoinRequest(BaseModel):
+    senha: Optional[str] = None
+
 class RoomOut(BaseModel):
     id: UUID
     nome_url: str
@@ -23,6 +26,8 @@ class RoomOut(BaseModel):
     max_membros: int
     created_by: Optional[UUID] = None
     created_at: datetime
+    tem_senha: bool = False
+    is_membro: bool = False
     sub_rooms: Optional[List["RoomOut"]] = []
 
     class Config:

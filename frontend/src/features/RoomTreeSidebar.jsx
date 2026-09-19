@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { joinRoom } from '../services/chat';
 
 export default function RoomTreeSidebar({
   rooms,
@@ -21,6 +22,12 @@ export default function RoomTreeSidebar({
   const [formTtl, setFormTtl] = useState(1440); // 24h em minutos
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Estados para modal de sala privada / protegida por senha
+  const [passwordModalRoom, setPasswordModalRoom] = useState(null);
+  const [roomPassword, setRoomPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [joining, setJoining] = useState(false);
 
   const toggleExpand = (roomId, e) => {
     e.stopPropagation();
@@ -66,6 +73,58 @@ export default function RoomTreeSidebar({
     }
   };
 
+  const handleRoomClick = async (room) => {
+    // Se o usuário já for membro da sala ou for site admin:
+    if (room.is_membro || user?.is_site_admin) {
+      onSelectRoom(room);
+      return;
+    }
+
+    // Se a sala for privada / tiver senha:
+    if (room.tem_senha) {
+      setPasswordModalRoom(room);
+      setRoomPassword('');
+      setPasswordError('');
+      return;
+    }
+
+    // Se for uma sala pública sem senha mas o usuário ainda não tem vínculo:
+    try {
+      await joinRoom(room.id);
+      room.is_membro = true;
+      onSelectRoom({ ...room, is_membro: true });
+    } catch (err) {
+      console.error("Erro ao entrar na sala pública:", err);
+      setPasswordModalRoom(room);
+      setRoomPassword('');
+      setPasswordError(err.message || 'Erro ao ingressar na sala.');
+    }
+  };
+
+  const handleJoinWithPassword = async (e) => {
+    e.preventDefault();
+    if (!passwordModalRoom) return;
+    if (!roomPassword.trim()) {
+      setPasswordError('Digite a senha da sala.');
+      return;
+    }
+
+    setJoining(true);
+    setPasswordError('');
+
+    try {
+      await joinRoom(passwordModalRoom.id, roomPassword.trim());
+      const joinedRoom = { ...passwordModalRoom, is_membro: true };
+      setPasswordModalRoom(null);
+      setRoomPassword('');
+      onSelectRoom(joinedRoom);
+    } catch (err) {
+      setPasswordError(err.message || 'Senha incorreta ou erro ao entrar na sala.');
+    } finally {
+      setJoining(false);
+    }
+  };
+
   // Separa as salas raiz (sem parent_id)
   const rootRooms = rooms.filter((r) => !r.parent_id);
 
@@ -78,7 +137,7 @@ export default function RoomTreeSidebar({
     return (
       <div key={room.id} className="flex flex-col">
         <div
-          onClick={() => onSelectRoom(room)}
+          onClick={() => handleRoomClick(room)}
           style={{ paddingLeft: `${depth * 14 + 12}px` }}
           className={`group flex items-center justify-between py-2 pr-3 rounded-lg text-xs cursor-pointer transition-all ${
             isActive
@@ -98,6 +157,9 @@ export default function RoomTreeSidebar({
             )}
             {!hasChildren && <span className="text-zinc-600 text-[10px]">#</span>}
             <span className="truncate">{room.titulo || room.nome_url}</span>
+            {room.tem_senha && (
+              <span className="text-[10px]" title="Sala protegida por senha">🔒</span>
+            )}
             {room.tipo_sala === 'temporaria' && (
               <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
                 TTL
@@ -285,6 +347,79 @@ export default function RoomTreeSidebar({
                   className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-500 disabled:opacity-50"
                 >
                   {loading ? 'Salvando...' : 'Criar Canal'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Senha para Sala Privada */}
+      {passwordModalRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <span>🔒</span>
+                <span>Sala Privada: {passwordModalRoom.titulo || passwordModalRoom.nome_url}</span>
+              </h3>
+              <button
+                onClick={() => {
+                  setPasswordModalRoom(null);
+                  setRoomPassword('');
+                  setPasswordError('');
+                }}
+                className="text-zinc-400 hover:text-zinc-200 text-lg leading-none cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-400 mb-4">
+              Esta sala é restrita e protegida por senha. Digite a credencial para autenticar e liberar o canal.
+            </p>
+
+            {passwordError && (
+              <div className="p-3 mb-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
+                <span className="font-bold">⚠️</span>
+                <span>{passwordError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleJoinWithPassword} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Senha da Sala
+                </label>
+                <input
+                  type="password"
+                  placeholder="••••••••••••"
+                  value={roomPassword}
+                  onChange={(e) => setRoomPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-black/60 border border-emerald-500/20 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50 text-xs"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPasswordModalRoom(null);
+                    setRoomPassword('');
+                    setPasswordError('');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={joining || !roomPassword.trim()}
+                  className="px-4 py-2 rounded-xl bg-[#10b981] hover:bg-[#34d399] text-[#050a08] font-bold text-xs shadow-lg shadow-emerald-500/20 disabled:opacity-50 cursor-pointer"
+                >
+                  {joining ? 'Validando...' : 'Acessar Sala'}
                 </button>
               </div>
             </form>

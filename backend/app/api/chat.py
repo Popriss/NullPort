@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia
 from app.schemas.chat import MessageCreate, MessageOut
-from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate
+from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, RoomJoinRequest
 from app.services.auth import decode_access_token, get_password_hash, verify_password
 from app.services.sse import manager
 from app.services.storage import validate_and_sanitize_image, upload_image_to_r2
@@ -52,17 +52,23 @@ def list_available_rooms(
     db: Session = Depends(get_db)
 ):
     """Lista todas as salas que o usuário tem acesso ou salas públicas."""
-    # Se for site admin, vê todas as salas
-    if user.is_site_admin:
-        return db.query(Sala).order_by(Sala.created_at.desc()).all()
+    membro_salas_ids = set(m.sala_id for m in user.membros)
 
-    # Usuário comum vê salas que é membro ou salas raiz permanentes
-    membro_salas_ids = [m.sala_id for m in user.membros]
-    salas = db.query(Sala).filter(
-        (Sala.id.in_(membro_salas_ids)) | 
-        ((Sala.is_permanente == True) & (Sala.parent_id.is_(None)))
-    ).order_by(Sala.created_at.desc()).all()
-    return salas
+    if user.is_site_admin:
+        salas = db.query(Sala).order_by(Sala.created_at.desc()).all()
+    else:
+        salas = db.query(Sala).filter(
+            (Sala.id.in_(membro_salas_ids)) | 
+            ((Sala.is_permanente == True) & (Sala.parent_id.is_(None)))
+        ).order_by(Sala.created_at.desc()).all()
+
+    results = []
+    for s in salas:
+        room_out = RoomOut.model_validate(s)
+        room_out.is_membro = (s.id in membro_salas_ids) or user.is_site_admin
+        room_out.tem_senha = bool(s.hash_senha)
+        results.append(room_out)
+    return results
 
 
 @router.get("/my-rooms", response_model=List[RoomOut])
@@ -87,7 +93,13 @@ def list_my_rooms(
         return []
 
     salas = db.query(Sala).filter(Sala.id.in_(membro_sala_ids)).order_by(Sala.created_at.desc()).all()
-    return salas
+    results = []
+    for s in salas:
+        room_out = RoomOut.model_validate(s)
+        room_out.is_membro = True
+        room_out.tem_senha = bool(s.hash_senha)
+        results.append(room_out)
+    return results
 
 
 @router.post("/rooms", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
@@ -155,6 +167,7 @@ def create_room(
 @router.post("/rooms/{room_id}/join", response_model=MemberOut)
 def join_room(
     room_id: UUID,
+    req: Optional[RoomJoinRequest] = None,
     senha: Optional[str] = None,
     user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -165,9 +178,12 @@ def join_room(
         raise HTTPException(status_code=404, detail="Sala não encontrada.")
 
     # Se a sala tiver senha e o usuário não for site_admin
+    senha_informada = (req.senha if req and req.senha is not None else None) or senha
     if room.hash_senha and not user.is_site_admin:
-        if not senha or not verify_password(senha, room.hash_senha):
-            raise HTTPException(status_code=401, detail="Senha da sala incorreta.")
+        if not senha_informada:
+            raise HTTPException(status_code=403, detail="Esta sala é protegida por senha. Informe a senha de acesso.")
+        if not verify_password(senha_informada, room.hash_senha):
+            raise HTTPException(status_code=403, detail="Senha da sala incorreta.")
 
     membro = db.query(MembroSala).filter(
         MembroSala.sala_id == room_id,
@@ -203,6 +219,8 @@ def get_subrooms(
     db: Session = Depends(get_db)
 ):
     """Busca recursiva em árvore de canais filhos."""
+    membro_salas_ids = set(m.sala_id for m in user.membros)
+
     def build_tree(parent_uuid: UUID):
         subs = db.query(Sala).filter(Sala.parent_id == parent_uuid).all()
         result = []
@@ -218,6 +236,8 @@ def get_subrooms(
                 "max_membros": s.max_membros,
                 "created_by": s.created_by,
                 "created_at": s.created_at,
+                "tem_senha": bool(s.hash_senha),
+                "is_membro": (s.id in membro_salas_ids) or user.is_site_admin,
                 "sub_rooms": build_tree(s.id)
             }
             result.append(s_dict)
@@ -428,9 +448,29 @@ def get_messages_legacy(
     sala_id = auth.get("sala_id")
     if not sala_id:
         raise HTTPException(status_code=400, detail="sala_id não encontrado no token.")
+
+    user_id = auth.get("user_id") or auth.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Identificador de usuário ausente no token.")
+
+    try:
+        sala_uuid = UUID(str(sala_id))
+        user_uuid = UUID(str(user_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Identificador inválido.")
+
+    user = db.query(Usuario).filter(Usuario.id == user_uuid).first()
+    if not (user and user.is_site_admin):
+        membro = db.query(MembroSala).filter(
+            MembroSala.sala_id == sala_uuid,
+            MembroSala.usuario_id == user_uuid
+        ).first()
+        if not membro:
+            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
+
     messages = (
         db.query(Mensagem)
-        .filter(Mensagem.sala_id == UUID(str(sala_id)))
+        .filter(Mensagem.sala_id == sala_uuid)
         .order_by(Mensagem.created_at.desc())
         .limit(limit)
         .all()
@@ -452,23 +492,30 @@ async def send_message_legacy(
     if not sala_id:
         raise HTTPException(status_code=400, detail="sala_id ausente.")
 
-    autor_uuid = None
-    if user_id:
-        try:
-            autor_uuid = UUID(str(user_id))
-            user = db.query(Usuario).filter(Usuario.id == autor_uuid).first()
-            if user and user.is_muted_global:
-                raise HTTPException(status_code=403, detail="Você está mutado globalmente.")
-            membro = db.query(MembroSala).filter(
-                MembroSala.sala_id == UUID(str(sala_id)),
-                MembroSala.usuario_id == autor_uuid
-            ).first()
-            if membro and membro.is_muted:
-                raise HTTPException(status_code=403, detail="Você está mutado nesta sala.")
-            if membro and membro.role == "view":
-                raise HTTPException(status_code=403, detail="Usuário com perfil view não pode enviar mensagens.")
-        except ValueError:
-            pass
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Identificador de usuário ausente no token.")
+
+    try:
+        sala_uuid = UUID(str(sala_id))
+        autor_uuid = UUID(str(user_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Identificador inválido.")
+
+    user = db.query(Usuario).filter(Usuario.id == autor_uuid).first()
+    if user and user.is_muted_global:
+        raise HTTPException(status_code=403, detail="Você está mutado globalmente.")
+
+    if not (user and user.is_site_admin):
+        membro = db.query(MembroSala).filter(
+            MembroSala.sala_id == sala_uuid,
+            MembroSala.usuario_id == autor_uuid
+        ).first()
+        if not membro:
+            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
+        if membro.is_muted:
+            raise HTTPException(status_code=403, detail="Você está mutado nesta sala.")
+        if membro.role == "view":
+            raise HTTPException(status_code=403, detail="Usuário com perfil view não pode enviar mensagens.")
 
     new_msg = Mensagem(
         sala_id=UUID(str(sala_id)),
@@ -534,7 +581,12 @@ async def react_to_message(
 
 
 @router.get("/stream")
-async def chat_stream(request: Request, token: str, room_id: Optional[str] = None):
+async def chat_stream(
+    request: Request,
+    token: str,
+    room_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     payload = decode_access_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token inválido.")
@@ -542,6 +594,26 @@ async def chat_stream(request: Request, token: str, room_id: Optional[str] = Non
     sala_id = room_id or payload.get("sala_id")
     if not sala_id:
         raise HTTPException(status_code=400, detail="sala_id não informado.")
+
+    user_id = payload.get("user_id") or payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Identificador de usuário ausente no token.")
+
+    try:
+        sala_uuid = UUID(str(sala_id))
+        user_uuid = UUID(str(user_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Identificador inválido.")
+
+    # Validar se o usuário é membro da sala ou site admin
+    user = db.query(Usuario).filter(Usuario.id == user_uuid).first()
+    if not (user and user.is_site_admin):
+        membro = db.query(MembroSala).filter(
+            MembroSala.sala_id == sala_uuid,
+            MembroSala.usuario_id == user_uuid
+        ).first()
+        if not membro:
+            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
 
     queue = await manager.connect(str(sala_id))
 
