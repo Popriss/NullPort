@@ -288,7 +288,7 @@ export default function ChatBox({
       </div>
 
       {/* Lista de Mensagens */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-xs py-12">
             <span className="text-3xl mb-2">💬</span>
@@ -296,7 +296,13 @@ export default function ChatBox({
             <p className="text-zinc-600">Seja o primeiro a iniciar a conversa!</p>
           </div>
         ) : (
-          messages.map((msg) => {
+          messages.map((msg, index) => {
+            const prevMsg = index > 0 ? messages[index - 1] : null;
+            const isSameAuthor = prevMsg && prevMsg.autor_nickname === msg.autor_nickname;
+            const timeDiff = prevMsg
+              ? (new Date(msg.created_at) - new Date(prevMsg.created_at)) / (1000 * 60)
+              : 999;
+            const isConsecutive = isSameAuthor && timeDiff < 3 && !msg.reply_to_id;
             const isMe = msg.autor_nickname === user?.nickname;
             const isImage = isImageUrl(msg.conteudo.trim());
             const mensagemOriginal = msg.reply_to_id
@@ -306,26 +312,30 @@ export default function ChatBox({
             return (
               <div
                 key={msg.id}
-                className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'}`}
+                className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'} ${
+                  isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'
+                }`}
               >
-                {/* Nome do autor com Badges de cargo */}
-                <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-zinc-400">
-                  <span>{msg.autor_nickname}</span>
-                  {/* Badge de Cargo se admin ou mod */}
-                  {members.find((m) => m.nickname === msg.autor_nickname)?.role === 'admin' && (
-                    <span className="text-[9px] px-1 py-0.2 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                      ADMIN
+                {/* Nome do autor com Badges de cargo (apenas se não for consecutiva) */}
+                {!isConsecutive && (
+                  <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-zinc-400">
+                    <span>{msg.autor_nickname}</span>
+                    {/* Badge de Cargo se admin ou mod */}
+                    {members.find((m) => m.nickname === msg.autor_nickname)?.role === 'admin' && (
+                      <span className="text-[9px] px-1 py-0.2 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        ADMIN
+                      </span>
+                    )}
+                    {members.find((m) => m.nickname === msg.autor_nickname)?.role === 'mod' && (
+                      <span className="text-[9px] px-1 py-0.2 rounded-full font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                        MOD
+                      </span>
+                    )}
+                    <span className="text-[10px] text-zinc-500">
+                      • {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
-                  )}
-                  {members.find((m) => m.nickname === msg.autor_nickname)?.role === 'mod' && (
-                    <span className="text-[9px] px-1 py-0.2 rounded-full font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                      MOD
-                    </span>
-                  )}
-                  <span className="text-[10px] text-zinc-500">
-                    • {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                </div>
+                  </div>
+                )}
 
                 {/* Balão da Mensagem */}
                 <div
