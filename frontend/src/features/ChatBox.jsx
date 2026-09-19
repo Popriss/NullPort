@@ -37,9 +37,17 @@ export default function ChatBox({
   const [members, setMembers] = useState(roomMembers);
   const [userRole, setUserRole] = useState('padrao');
   const [isUserMuted, setIsUserMuted] = useState(false);
+  const [activeMenuId, setActiveMenuId] = useState(null);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  // Fechar menu contextual ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = () => setActiveMenuId(null);
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
 
   const roomId = activeRoom?.id || user?.sala_id;
   const roomTitle = activeRoom?.titulo || activeRoom?.nome_url || user?.nome_url || 'Chat';
@@ -337,126 +345,172 @@ export default function ChatBox({
                   </div>
                 )}
 
-                {/* Balão da Mensagem */}
+                {/* Linha do Balão com Botão de Ações (...) */}
                 <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm relative shadow-md ${
-                    isMe
-                      ? 'bg-emerald-600 text-white rounded-br-xs'
-                      : 'bg-zinc-800 text-zinc-100 rounded-bl-xs border border-zinc-700/60'
+                  className={`relative flex items-center gap-1.5 group/msg max-w-[85%] ${
+                    isMe ? 'flex-row-reverse' : 'flex-row'
                   }`}
                 >
-                  {/* Citação / Resposta */}
-                  {mensagemOriginal && (
-                    <div className="mb-2 p-2 rounded bg-black/25 border-l-2 border-emerald-400 text-xs text-zinc-300">
-                      <span className="font-semibold block text-emerald-300">
-                        {mensagemOriginal.autor_nickname}
-                      </span>
-                      <p className="truncate">{mensagemOriginal.conteudo}</p>
-                    </div>
-                  )}
+                  {/* Balão da Mensagem */}
+                  <div
+                    className={`rounded-2xl px-4 py-2.5 text-sm relative shadow-md ${
+                      isMe
+                        ? 'bg-emerald-600 text-white rounded-br-xs'
+                        : 'bg-zinc-800 text-zinc-100 rounded-bl-xs border border-zinc-700/60'
+                    }`}
+                  >
+                    {/* Citação / Resposta */}
+                    {mensagemOriginal && (
+                      <div className="mb-2 p-2 rounded bg-black/25 border-l-2 border-emerald-400 text-xs text-zinc-300">
+                        <span className="font-semibold block text-emerald-300">
+                          {mensagemOriginal.autor_nickname}
+                        </span>
+                        <p className="truncate">{mensagemOriginal.conteudo}</p>
+                      </div>
+                    )}
 
-                  {isImage ? (
-                    <img
-                      src={msg.conteudo.trim()}
-                      alt="Anexo de mídia"
-                      className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-zoom-in"
-                      onClick={() => setImagemAmpliada(msg.conteudo.trim())}
-                    />
-                  ) : (
-                    <div className="text-sm break-words whitespace-pre-wrap">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        rehypePlugins={[rehypeSanitize]}
-                        components={{
-                          img: ({ node, ...props }) => (
-                            <img
-                              {...props}
-                              className="max-w-sm rounded-lg my-2 shadow-md cursor-zoom-in hover:opacity-90 transition-opacity"
-                              loading="lazy"
-                              onClick={() => setImagemAmpliada(props.src)}
-                            />
-                          ),
-                          p: ({ node, ...props }) => <p className="mb-1 last:mb-0" {...props} />,
-                          a: ({ node, ...props }) => (
-                            <a
-                              className="text-emerald-300 hover:underline font-medium"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              {...props}
-                            />
-                          ),
-                          code: ({ node, inline, ...props }) =>
-                            inline ? (
-                              <code className="bg-black/30 px-1.5 py-0.5 rounded text-emerald-300 font-mono text-[13px]" {...props} />
-                            ) : (
-                              <pre className="bg-black/40 p-3 rounded-md overflow-x-auto my-2 border border-zinc-700/50">
-                                <code className="font-mono text-[13px] text-zinc-200" {...props} />
-                              </pre>
+                    {isImage ? (
+                      <img
+                        src={msg.conteudo.trim()}
+                        alt="Anexo de mídia"
+                        className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-zoom-in"
+                        onClick={() => setImagemAmpliada(msg.conteudo.trim())}
+                      />
+                    ) : (
+                      <div className="text-sm break-words whitespace-pre-wrap">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          rehypePlugins={[rehypeSanitize]}
+                          components={{
+                            img: ({ node, ...props }) => (
+                              <img
+                                {...props}
+                                className="max-w-sm rounded-lg my-2 shadow-md cursor-zoom-in hover:opacity-90 transition-opacity"
+                                loading="lazy"
+                                onClick={() => setImagemAmpliada(props.src)}
+                              />
                             ),
-                        }}
-                      >
-                        {msg.conteudo}
-                      </ReactMarkdown>
-                    </div>
-                  )}
+                            p: ({ node, ...props }) => <p className="mb-1 last:mb-0" {...props} />,
+                            a: ({ node, ...props }) => (
+                              <a
+                                className="text-emerald-300 hover:underline font-medium"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                {...props}
+                              />
+                            ),
+                            code: ({ node, inline, ...props }) =>
+                              inline ? (
+                                <code className="bg-black/30 px-1.5 py-0.5 rounded text-emerald-300 font-mono text-[13px]" {...props} />
+                              ) : (
+                                <pre className="bg-black/40 p-3 rounded-md overflow-x-auto my-2 border border-zinc-700/50">
+                                  <code className="font-mono text-[13px] text-zinc-200" {...props} />
+                                </pre>
+                              ),
+                          }}
+                        >
+                          {msg.conteudo}
+                        </ReactMarkdown>
+                      </div>
+                    )}
 
-                  {/* Reações com Emojis */}
-                  {msg.reacoes && Object.keys(msg.reacoes).length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {Object.entries(msg.reacoes).map(([emoji, usuarios]) => {
-                        const usuarioReagiu = usuarios.includes(user?.nickname);
-                        return (
-                          <button
-                            key={emoji}
-                            onClick={() => handleReaction(msg.id, emoji)}
-                            title={usuarios.join(', ')}
-                            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
-                              usuarioReagiu
-                                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
-                                : 'bg-zinc-900/60 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
-                            }`}
-                          >
-                            <span>{emoji}</span>
-                            <span className="font-bold text-[10px]">{usuarios.length}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Barra Flutuante de Ações Rápidas */}
-                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2 mt-1 text-[11px] text-zinc-400 px-1">
-                  {/* Reações Rápidas (View users PODEM reagir!) */}
-                  <div className="flex items-center gap-1 bg-zinc-950 border border-zinc-800 rounded-full px-2 py-0.5 shadow-md">
-                    {EMOJIS_DISPONIVEIS.map((emoji) => (
-                      <button
-                        key={emoji}
-                        onClick={() => handleReaction(msg.id, emoji)}
-                        className="hover:scale-125 transition-transform cursor-pointer"
-                        title={`Reagir com ${emoji}`}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
+                    {/* Reações com Emojis */}
+                    {msg.reacoes && Object.keys(msg.reacoes).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {Object.entries(msg.reacoes).map(([emoji, usuarios]) => {
+                          const usuarioReagiu = usuarios.includes(user?.nickname);
+                          return (
+                            <button
+                              key={emoji}
+                              onClick={() => handleReaction(msg.id, emoji)}
+                              title={usuarios.join(', ')}
+                              className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                                usuarioReagiu
+                                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
+                                  : 'bg-zinc-900/60 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                              }`}
+                            >
+                              <span>{emoji}</span>
+                              <span className="font-bold text-[10px]">{usuarios.length}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Responder (desabilitado se View ou Muted) */}
-                  {!isUserMuted && userRole !== 'view' && (
+                  {/* Botão de Gatilho '...' com Dropdown Popover */}
+                  <div className="relative flex items-center">
                     <button
-                      onClick={() => setReplyingTo(msg)}
-                      className="hover:text-emerald-400 transition-colors cursor-pointer bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 shadow-md"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveMenuId(activeMenuId === msg.id ? null : msg.id);
+                      }}
+                      className="opacity-0 max-sm:opacity-70 group-hover/msg:opacity-100 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 transition-all cursor-pointer"
+                      title="Mais opções"
                     >
-                      Responder
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" />
+                      </svg>
                     </button>
-                  )}
 
-                  <button
-                    onClick={() => copiarTexto(msg.conteudo)}
-                    className="hover:text-emerald-400 transition-colors cursor-pointer bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 shadow-md"
-                  >
-                    Copiar
-                  </button>
+                    {/* Dropdown Menu Suspenso */}
+                    {activeMenuId === msg.id && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className={`absolute z-50 ${
+                          index > 1 ? 'bottom-full mb-1' : 'top-full mt-1'
+                        } ${
+                          isMe ? 'right-0' : 'left-0'
+                        } bg-zinc-950/95 border border-zinc-800 rounded-xl shadow-2xl p-2 min-w-[165px] backdrop-blur-md animate-in fade-in zoom-in-95 duration-100`}
+                      >
+                        {/* Emojis Rápidos */}
+                        <div className="flex items-center justify-between gap-1 px-1 py-1 mb-1">
+                          {EMOJIS_DISPONIVEIS.map((emoji) => (
+                            <button
+                              key={emoji}
+                              onClick={() => {
+                                handleReaction(msg.id, emoji);
+                                setActiveMenuId(null);
+                              }}
+                              className="hover:scale-125 transition-transform text-sm cursor-pointer p-1"
+                              title={`Reagir com ${emoji}`}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="border-t border-zinc-800/80 my-1" />
+
+                        {/* Opção Responder */}
+                        {!isUserMuted && userRole !== 'view' && (
+                          <button
+                            onClick={() => {
+                              setReplyingTo(msg);
+                              setActiveMenuId(null);
+                            }}
+                            className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-zinc-300 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer text-left"
+                          >
+                            <span>↩️</span>
+                            <span>Responder</span>
+                          </button>
+                        )}
+
+                        {/* Opção Copiar */}
+                        <button
+                          onClick={() => {
+                            copiarTexto(msg.conteudo);
+                            setActiveMenuId(null);
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-zinc-300 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer text-left"
+                        >
+                          <span>📋</span>
+                          <span>Copiar mensagem</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             );
