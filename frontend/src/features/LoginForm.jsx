@@ -74,12 +74,24 @@ export default function LoginForm({ onLoginSuccess }) {
   return (
     <div className="min-h-screen w-full flex flex-col md:flex-row bg-[#050a08] text-white selection:bg-emerald-500 selection:text-black">
       {/* Coluna Esquerda: Hero Galaxy 3D com HUD Tech */}
-      <section className="flex-1 min-h-[380px] md:min-h-screen border-b md:border-b-0 md:border-r border-emerald-500/10 relative overflow-hidden bg-[#050a08]">
-        {/* Canvas de Partículas 3D Interativo */}
-        <GalaxyCanvas particleCount={2200} interactive={true} opacity={1.0} />
+      <section className="flex-1 min-h-[380px] md:min-h-screen relative overflow-hidden bg-[#050a08]">
+        {/* Canvas de Partículas 3D Interativo com máscara alfa progressiva */}
+        <GalaxyCanvas
+          particleCount={2200}
+          interactive={true}
+          opacity={1.0}
+          fadeEdges={true}
+        />
+
+        {/* Camada de Fusão Suave: Transição progressiva entre animação e formulário */}
+        {/* Desktop: Gradiente horizontal na borda direita (140px-180px) */}
+        <div className="hidden md:block pointer-events-none absolute top-0 right-0 h-full w-36 lg:w-48 bg-gradient-to-r from-transparent via-[#050a08]/80 to-[#050a08] z-10" />
+
+        {/* Mobile: Gradiente vertical na borda inferior */}
+        <div className="block md:hidden pointer-events-none absolute bottom-0 inset-x-0 h-28 bg-gradient-to-b from-transparent via-[#050a08]/80 to-[#050a08] z-10" />
 
         {/* Top HUD Flutuante */}
-        <div className="absolute top-0 inset-x-0 p-6 md:p-8 flex items-center justify-between pointer-events-none z-10">
+        <div className="absolute top-0 inset-x-0 p-6 md:p-8 flex items-center justify-between pointer-events-none z-20">
           <div className="flex items-center gap-2">
             <span className="text-emerald-400 font-mono text-sm tracking-wider font-bold">⬡ NULLPORT</span>
             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
@@ -93,7 +105,7 @@ export default function LoginForm({ onLoginSuccess }) {
         </div>
 
         {/* Dica Interativa de Cursor (sutil no centro) */}
-        <div className="hidden lg:flex absolute top-1/2 left-8 transform -translate-y-1/2 pointer-events-none opacity-40 hover:opacity-100 transition-opacity">
+        <div className="hidden lg:flex absolute top-1/2 left-8 transform -translate-y-1/2 pointer-events-none opacity-40 hover:opacity-100 transition-opacity z-20">
           <div className="border-l border-emerald-500/30 pl-3 py-1 text-[10px] font-mono text-zinc-400 space-y-0.5">
             <p className="text-emerald-400 font-semibold">// 3D GRAVITY FIELD</p>
             <p>Mova o mouse para interagir com a galáxia</p>
@@ -101,7 +113,7 @@ export default function LoginForm({ onLoginSuccess }) {
         </div>
 
         {/* Bottom Overlay: Tipografia & Badges Minimalistas */}
-        <div className="absolute inset-0 flex flex-col justify-end p-6 md:p-12 pointer-events-none bg-gradient-to-t from-[#050a08] via-[#050a08]/40 to-transparent z-10">
+        <div className="absolute inset-0 flex flex-col justify-end p-6 md:p-12 pointer-events-none bg-gradient-to-t from-[#050a08] via-[#050a08]/40 to-transparent z-20">
           <div className="space-y-4 max-w-lg">
             <div>
               <h1 className="text-4xl md:text-6xl font-black tracking-tight text-white flex items-center gap-1">

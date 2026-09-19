@@ -11,6 +11,9 @@ export default function GalaxyCanvas({
   particleCount = 2200,
   interactive = true,
   opacity = 1.0,
+  fadeEdges = false,
+  className = '',
+  canvasClassName = '',
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -303,11 +306,16 @@ export default function GalaxyCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full overflow-hidden bg-[#050a08]"
+      className={`relative w-full h-full overflow-hidden bg-[#050a08] ${className}`}
     >
       <canvas
         ref={canvasRef}
-        className="block w-full h-full"
+        id="galaxy-canvas"
+        className={`block w-full h-full ${
+          fadeEdges
+            ? '[mask-image:linear-gradient(to_bottom,black_70%,transparent_100%)] md:[mask-image:linear-gradient(to_right,black_70%,transparent_100%)] [-webkit-mask-image:linear-gradient(to_bottom,black_70%,transparent_100%)] md:[-webkit-mask-image:linear-gradient(to_right,black_70%,transparent_100%)]'
+            : ''
+        } ${canvasClassName}`}
         style={{ opacity }}
       />
     </div>
