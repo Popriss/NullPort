@@ -19,7 +19,7 @@ import {
 import { compressImage } from '../utils/compression';
 import { isImageUrl, isAudioUrl, isPdfUrl } from '../utils/regex';
 import { initScreenProtection } from '../utils/screenProtection';
-import { parseUtcDate, formatMessageTime, formatMessageDateTime } from '../utils/date';
+import { parseUtcDate, formatMessageTime, formatMessageDateTime, formatDateDivider, isSameDay } from '../utils/date';
 import Button from '../components/Button';
 import ModerationDrawer from './ModerationDrawer';
 import ViewOnceModal from './ViewOnceModal';
@@ -948,11 +948,13 @@ export default function ChatBox({
         ) : (
           messages.map((msg, index) => {
             const prevMsg = index > 0 ? messages[index - 1] : null;
+            const isSameDayMsg = prevMsg ? isSameDay(prevMsg.created_at, msg.created_at) : false;
+            const showDateDivider = !isSameDayMsg;
             const isSameAuthor = prevMsg && prevMsg.autor_nickname === msg.autor_nickname;
             const prevTime = prevMsg ? parseUtcDate(prevMsg.created_at)?.getTime() : null;
             const currTime = parseUtcDate(msg.created_at)?.getTime();
             const timeDiff = prevTime && currTime ? (currTime - prevTime) / (1000 * 60) : 999;
-            const isConsecutive = isSameAuthor && timeDiff < 3 && !msg.reply_to_id;
+            const isConsecutive = isSameAuthor && isSameDayMsg && timeDiff < 3 && !msg.reply_to_id;
             const isMe = msg.autor_nickname === user?.nickname;
             const isImage = isImageUrl(msg.conteudo.trim());
             const isAudio = isAudioUrl(msg.conteudo.trim());
@@ -963,17 +965,29 @@ export default function ChatBox({
             const isMenuActive = activeMenuId === msg.id;
 
             return (
-              <div
-                id={`msg-${msg.id}`}
-                key={msg.id}
-                className={`flex flex-col group relative ${
-                  isMenuActive
-                    ? 'z-50'
-                    : 'z-0 message-item-contain [content-visibility:auto] [contain-intrinsic-size:0_54px]'
-                } ${
-                  isMe ? 'items-end' : 'items-start'
-                } ${isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'}`}
-              >
+              <React.Fragment key={msg.id}>
+                {/* Separador de Dia de Envio */}
+                {showDateDivider && (
+                  <div className="flex items-center justify-center my-3.5 select-none">
+                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-800/90 border border-zinc-700/60 shadow-xs backdrop-blur-xs">
+                      <span className="text-[10px]">📅</span>
+                      <span className="text-[11px] font-medium text-zinc-300 tracking-wide">
+                        {formatDateDivider(msg.created_at)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  id={`msg-${msg.id}`}
+                  className={`flex flex-col group relative ${
+                    isMenuActive
+                      ? 'z-50'
+                      : 'z-0 message-item-contain [content-visibility:auto] [contain-intrinsic-size:0_54px]'
+                  } ${
+                    isMe ? 'items-end' : 'items-start'
+                  } ${isConsecutive ? 'mt-1' : 'mt-4 first:mt-0'}`}
+                >
                 {/* Nome do autor com Badges de cargo (apenas se não for consecutiva) */}
                 {!isConsecutive && (
                   <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] font-medium text-zinc-400">
@@ -1286,8 +1300,9 @@ export default function ChatBox({
                   </div>
                 </div>
               </div>
-            );
-          })
+            </React.Fragment>
+          );
+        })
         )}
 
         {/* Botão Flutuante de Auto-Scroll Inteligente */}

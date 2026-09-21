@@ -39,3 +39,57 @@ export function formatMessageDate(dateInput) {
   if (!d) return '';
   return d.toLocaleDateString('pt-BR');
 }
+
+/**
+ * Compara se duas datas pertencem ao mesmo dia civil no fuso horário local.
+ */
+export function isSameDay(d1, d2) {
+  const date1 = parseUtcDate(d1);
+  const date2 = parseUtcDate(d2);
+  if (!date1 || !date2) return false;
+  return (
+    date1.getFullYear() === date2.getFullYear() &&
+    date1.getMonth() === date2.getMonth() &&
+    date1.getDate() === date2.getDate()
+  );
+}
+
+/**
+ * Formata a data para divisores de dia no chat:
+ * - "Hoje" para mensagens do dia atual
+ * - "Ontem" para mensagens do dia anterior
+ * - "21 de setembro" para mensagens do ano corrente
+ * - "21 de setembro de 2025" para mensagens de anos anteriores
+ */
+export function formatDateDivider(dateInput) {
+  const d = parseUtcDate(dateInput);
+  if (!d) return '';
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  const diffTime = today.getTime() - target.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) {
+    return 'Hoje';
+  }
+  if (diffDays === 1) {
+    return 'Ontem';
+  }
+
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString('pt-BR', {
+      day: 'numeric',
+      month: 'long'
+    });
+  }
+
+  return d.toLocaleDateString('pt-BR', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+}
+
