@@ -17,7 +17,7 @@ import {
   submitReport
 } from '../services/chat';
 import { compressImage } from '../utils/compression';
-import { isImageUrl } from '../utils/regex';
+import { isImageUrl, isAudioUrl, isPdfUrl } from '../utils/regex';
 import { initScreenProtection } from '../utils/screenProtection';
 import Button from '../components/Button';
 import ModerationDrawer from './ModerationDrawer';
@@ -581,29 +581,32 @@ export default function ChatBox({
     }
   };
 
-  // Processamento e compressão de imagem client-side (para upload e drag-and-drop)
-  const processAndUploadImage = async (file) => {
+  // Processamento e envio de mídias: fotos (comprimidas), áudios e documentos (RF02, RF07, RN04)
+  const processAndUploadFile = async (file) => {
     if (!file || isUserMuted || userRole === 'view') {
       if (isUserMuted || userRole === 'view') {
-        showToast("Você não possui permissão para enviar imagens nesta sala.", "warning");
+        showToast("Você não possui permissão para enviar arquivos nesta sala.", "warning");
       }
       return;
     }
 
     try {
-      setIsCompressing(true);
-      setCompressionProgress(20);
+      let fileToSend = file;
+      if (file.type.startsWith('image/')) {
+        setIsCompressing(true);
+        setCompressionProgress(20);
 
-      const compInterval = setInterval(() => {
-        setCompressionProgress((p) => Math.min(p + 20, 85));
-      }, 120);
+        const compInterval = setInterval(() => {
+          setCompressionProgress((p) => Math.min(p + 20, 85));
+        }, 120);
 
-      const compressed = await compressImage(file);
-      clearInterval(compInterval);
-      setCompressionProgress(92);
+        fileToSend = await compressImage(file);
+        clearInterval(compInterval);
+        setCompressionProgress(92);
+      }
 
       setUploading(true);
-      const { url } = await uploadImage(compressed);
+      const { url } = await uploadImage(fileToSend);
       setCompressionProgress(100);
 
       const replyId = replyingTo ? replyingTo.id : null;
@@ -619,10 +622,15 @@ export default function ChatBox({
       setIsViewOnce(false);
       setReplyingTo(null);
       scrollToBottom(true);
-      showToast("Imagem comprimida e enviada com sucesso!", "success");
+      const label = file.type.startsWith('image/')
+        ? "Imagem enviada com sucesso!"
+        : file.type.startsWith('audio/')
+        ? "Áudio enviado com sucesso!"
+        : "Documento PDF enviado com sucesso!";
+      showToast(label, "success");
     } catch (err) {
-      console.error("Erro no upload de imagem:", err);
-      showToast(err.message || "Erro ao processar imagem.", "error");
+      console.error("Erro no upload de arquivo:", err);
+      showToast(err.message || "Erro ao processar arquivo.", "error");
     } finally {
       setIsCompressing(false);
       setUploading(false);
@@ -631,9 +639,9 @@ export default function ChatBox({
     }
   };
 
-  const handleImageUpload = (e) => {
+  const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
-    if (file) processAndUploadImage(file);
+    if (file) processAndUploadFile(file);
   };
 
   const handleDragOver = (e) => {
@@ -654,10 +662,15 @@ export default function ChatBox({
     if (isUserMuted || userRole === 'view') return;
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
-    if (file.type.startsWith('image/')) {
-      processAndUploadImage(file);
+    if (
+      file.type.startsWith('image/') ||
+      file.type.startsWith('audio/') ||
+      file.type === 'application/pdf' ||
+      file.name.endsWith('.pdf')
+    ) {
+      processAndUploadFile(file);
     } else {
-      showToast("Apenas arquivos de imagem são suportados para envio direto.", "warning");
+      showToast("Formato não suportado. Envie imagens, áudios ou documentos PDF.", "warning");
     }
   };
 
@@ -864,6 +877,8 @@ export default function ChatBox({
             const isConsecutive = isSameAuthor && timeDiff < 3 && !msg.reply_to_id;
             const isMe = msg.autor_nickname === user?.nickname;
             const isImage = isImageUrl(msg.conteudo.trim());
+            const isAudio = isAudioUrl(msg.conteudo.trim());
+            const isPdf = isPdfUrl(msg.conteudo.trim());
             const mensagemOriginal = msg.reply_to_id
               ? messages.find((m) => m.id === msg.reply_to_id)
               : null;
@@ -960,6 +975,32 @@ export default function ChatBox({
                         className="rounded-lg max-h-80 w-auto object-cover hover:opacity-95 cursor-zoom-in"
                         onClick={() => setImagemAmpliada(msg.conteudo.trim())}
                       />
+                    ) : isAudio ? (
+                      <div className="my-1.5 p-2.5 rounded-xl bg-black/40 border border-zinc-700/60 max-w-sm">
+                        <div className="flex items-center gap-2 mb-1.5 text-xs text-emerald-400 font-mono font-bold">
+                          <span>🎵</span>
+                          <span>Áudio da Conversa</span>
+                        </div>
+                        <audio controls src={msg.conteudo.trim()} className="w-full h-8" />
+                      </div>
+                    ) : isPdf ? (
+                      <a
+                        href={msg.conteudo.trim()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 p-3 rounded-xl bg-black/40 border border-emerald-500/30 hover:border-emerald-400 transition-colors my-1.5 max-w-sm group select-none"
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-red-500/20 text-red-400 border border-red-500/30 flex items-center justify-center text-xl font-bold">
+                          📄
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold text-zinc-200 truncate group-hover:text-emerald-300">
+                            {msg.conteudo.trim().split('/').pop() || 'Documento.pdf'}
+                          </div>
+                          <div className="text-[11px] text-zinc-400 font-mono">Documento PDF • Toque para visualizar</div>
+                        </div>
+                        <span className="text-zinc-400 group-hover:text-emerald-300 text-sm">↗</span>
+                      </a>
                     ) : (
                       <div className="text-sm break-words whitespace-pre-wrap max-w-full overflow-hidden">
                         <ReactMarkdown
@@ -1271,8 +1312,8 @@ export default function ChatBox({
           <input
             type="file"
             ref={fileInputRef}
-            onChange={handleImageUpload}
-            accept="image/*"
+            onChange={handleFileUpload}
+            accept="image/*,audio/*,.pdf"
             className="hidden"
             disabled={isInputDisabled}
           />
@@ -1281,9 +1322,9 @@ export default function ChatBox({
             onClick={() => fileInputRef.current?.click()}
             disabled={isInputDisabled || uploading}
             className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            title={isInputDisabled ? "Envio desativado para seu cargo" : "Enviar Imagem (Comprimida client-side)"}
+            title={isInputDisabled ? "Envio desativado para seu cargo" : "Anexar Arquivo (Imagens, Áudios ou PDFs)"}
           >
-            {uploading ? '⏳' : '📷'}
+            {uploading ? '⏳' : '📎'}
           </button>
 
           {/* Botão de Foto de Visualização Única (RF07) */}
@@ -1335,7 +1376,7 @@ export default function ChatBox({
                 ? "Modo apenas visualização (View)."
                 : replyingTo
                 ? "Digite sua resposta..."
-                : "Digite sua mensagem... (Arraste imagens ou use Markdown)"
+                : "Digite sua mensagem... (Arraste fotos, áudios ou PDFs)"
             }
             className="flex-1 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[44px] max-h-28 overflow-y-auto disabled:opacity-40 disabled:cursor-not-allowed text-xs sm:text-sm"
             rows="1"
@@ -1351,14 +1392,14 @@ export default function ChatBox({
         </form>
       </div>
 
-      {/* Overlay de Drag-and-Drop de Imagens */}
+      {/* Overlay de Drag-and-Drop de Mídias */}
       {isDraggingOver && (
         <div className="absolute inset-0 z-40 bg-black/85 backdrop-blur-sm border-2 border-dashed border-emerald-400 rounded-2xl flex flex-col items-center justify-center gap-3 pointer-events-none">
           <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 flex items-center justify-center text-3xl text-emerald-400 border border-emerald-500/40 animate-pulse">
-            📷
+            📎
           </div>
-          <p className="text-emerald-300 font-mono text-sm font-bold">Solte a imagem para comprimir e enviar</p>
-          <p className="text-zinc-400 font-mono text-xs">A compressão client-side será iniciada imediatamente</p>
+          <p className="text-emerald-300 font-mono text-sm font-bold">Solte o arquivo para enviar</p>
+          <p className="text-zinc-400 font-mono text-xs">Suporta fotos com compressão, áudios e documentos PDF</p>
         </div>
       )}
 

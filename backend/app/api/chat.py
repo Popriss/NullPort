@@ -1044,8 +1044,8 @@ async def upload_image(
     auth: dict = Depends(get_user_or_room_auth)
 ):
     contents = await file.read()
-    if len(contents) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Arquivo excede o limite máximo permitido de 5MB.")
+    if len(contents) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Arquivo excede o limite máximo permitido de 25MB.")
 
     # Validação rigorosa por Magic Bytes reais e sanitização EXIF
     sanitized_bytes, real_mime, extension = validate_and_sanitize_image(contents, file.filename or "upload.jpg")

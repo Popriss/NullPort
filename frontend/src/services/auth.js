@@ -148,3 +148,12 @@ export function logout() {
   localStorage.removeItem('nullport_token');
   localStorage.removeItem('nullport_user');
 }
+
+// RN06: Portabilidade LGPD (Exportação de Dados Pessoais)
+export async function exportUserData() {
+  const token = getToken();
+  return await request('/api/auth/me/export', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+}
+

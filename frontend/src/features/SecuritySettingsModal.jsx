@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { listSessions, revokeSession, revokeOtherSessions, deleteAccount } from '../services/auth';
+import { listSessions, revokeSession, revokeOtherSessions, deleteAccount, exportUserData } from '../services/auth';
 import { fetchBlockedUsers, unblockUser } from '../services/chat';
 
 export default function SecuritySettingsModal({ isOpen, onClose, onAccountDeleted }) {
@@ -14,6 +14,29 @@ export default function SecuritySettingsModal({ isOpen, onClose, onAccountDelete
   const [deletePassword, setDeletePassword] = useState('');
   const [confirmText, setConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportData = async () => {
+    try {
+      setExporting(true);
+      setError(null);
+      const data = await exportUserData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `nullport_meus_dados_lgpd_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMessage('Exportação LGPD concluída com sucesso.');
+    } catch (err) {
+      setError(err.message || 'Falha ao exportar dados.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -405,9 +428,47 @@ export default function SecuritySettingsModal({ isOpen, onClose, onAccountDelete
             </div>
           )}
 
-          {/* Aba 3: Exclusão LGPD (RN06) */}
+          {/* Aba 3: LGPD e Portabilidade (RN06) */}
           {activeTab === 'lgpd' && (
             <div>
+              {/* Portabilidade de Dados */}
+              <div
+                style={{
+                  backgroundColor: 'rgba(16, 185, 129, 0.08)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  padding: '14px',
+                  borderRadius: '10px',
+                  marginBottom: '20px'
+                }}
+              >
+                <div style={{ color: '#34d399', fontWeight: 700, fontSize: '14px', marginBottom: '6px' }}>
+                  📦 Portabilidade de Dados Pessoais (LGPD Art. 18)
+                </div>
+                <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: '1.5', marginBottom: '12px' }}>
+                  Baixe uma cópia completa e legível dos seus dados cadastrais, salas administradas e estatísticas em formato JSON padronizado.
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExportData}
+                  disabled={exporting}
+                  style={{
+                    backgroundColor: '#10b981',
+                    color: '#050a08',
+                    fontWeight: 700,
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    fontSize: '12px',
+                    cursor: exporting ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  {exporting ? 'Gerando arquivo...' : '📥 Baixar Meus Dados (.JSON)'}
+                </button>
+              </div>
+
               <div
                 style={{
                   backgroundColor: 'rgba(239, 68, 68, 0.1)',

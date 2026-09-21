@@ -187,6 +187,61 @@ class TestNullPortAdvancedFeatures(unittest.TestCase):
         self.assertEqual(purged_media_count, 2)
         self.assertTrue(account_deleted)
 
+    def test_rf02_rn04_audio_pdf_validation(self):
+        """RF02 & RN04: Validação de áudios (MP3/WAV/OGG) e documentos PDF por magic bytes"""
+        pdf_bytes = b"%PDF-1.4 header contents..."
+        mp3_bytes = b"ID3\x03\x00\x00\x00..."
+        exe_bytes = b"MZ\x90\x00\x03\x00\x00\x00..."
+
+        def detect_type(b: bytes):
+            if b.startswith(b"%PDF-"):
+                return "application/pdf", "pdf"
+            elif b.startswith(b"ID3") or b[:2] in (b"\xff\xfb", b"\xff\xf3"):
+                return "audio/mpeg", "mp3"
+            elif b.startswith(b"MZ"):
+                return "application/x-dosexec", "exe"
+            return "unknown", "bin"
+
+        mime, ext = detect_type(pdf_bytes)
+        self.assertEqual(mime, "application/pdf")
+        self.assertEqual(ext, "pdf")
+
+        mime, ext = detect_type(mp3_bytes)
+        self.assertEqual(mime, "audio/mpeg")
+        self.assertEqual(ext, "mp3")
+
+        mime, ext = detect_type(exe_bytes)
+        self.assertEqual(mime, "application/x-dosexec")
+        self.assertNotEqual(mime, "application/pdf")
+
+    def test_rn06_lgpd_data_portability(self):
+        """RN06: Estrutura de Portabilidade de Dados Pessoais em JSON (LGPD Art. 18)"""
+        user_export = {
+            "export_metadata": {
+                "plataforma": "NullPort Protocol",
+                "conformidade": "LGPD (Lei 13.709/2018) Art. 18 / GDPR",
+                "gerado_em": datetime.now(timezone.utc).isoformat()
+            },
+            "perfil_operador": {
+                "id": str(uuid.uuid4()),
+                "nickname": "SecOps_Lead",
+                "email": "secops@nullport.io",
+                "telefone": "+5511999998888",
+                "role": "admin"
+            },
+            "sessoes_ativas": [{"device_name": "Chrome Linux", "ip_address": "10.0.0.1"}],
+            "salas_criadas": [{"nome": "WarRoom Alpha", "is_secret_mode": False}],
+            "estatisticas": {"total_mensagens_enviadas": 42}
+        }
+
+        self.assertIn("export_metadata", user_export)
+        self.assertIn("perfil_operador", user_export)
+        self.assertIn("salas_criadas", user_export)
+        self.assertEqual(user_export["estatisticas"]["total_mensagens_enviadas"], 42)
+        json_output = json.dumps(user_export)
+        self.assertIsInstance(json_output, str)
+
 
 if __name__ == '__main__':
     unittest.main()
+

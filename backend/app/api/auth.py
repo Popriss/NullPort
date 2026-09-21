@@ -419,6 +419,60 @@ def delete_account_lgpd(
     return {"message": "Sua conta e todos os dados associados foram excluídos definitivamente conforme a LGPD."}
 
 
+@router.get("/me/export")
+def export_user_data_lgpd(
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Portabilidade de Dados Pessoais (RN06 - LGPD Art. 18).
+    Exporta todos os dados cadastrais e vínculos do operador em formato aberto JSON.
+    """
+    sessoes = db.query(SessaoAtiva).filter(SessaoAtiva.usuario_id == user.id).all()
+    salas = db.query(Sala).filter(Sala.criador_id == user.id).all()
+    total_mensagens = db.query(Mensagem).filter(Mensagem.autor_id == user.id).count()
+
+    return {
+        "export_metadata": {
+            "plataforma": "NullPort Protocol",
+            "conformidade": "LGPD (Lei 13.709/2018) Art. 18 / GDPR",
+            "gerado_em": datetime.now(timezone.utc).isoformat(),
+        },
+        "perfil_operador": {
+            "id": str(user.id),
+            "nickname": user.nickname,
+            "email": user.email,
+            "telefone": user.telefone,
+            "role": user.role,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "has_e2ee_key": bool(user.public_key_e2ee)
+        },
+        "sessoes_ativas": [
+            {
+                "id": str(s.id),
+                "device_name": s.device_name,
+                "ip_address": s.ip_address,
+                "last_active_at": s.last_active_at.isoformat() if s.last_active_at else None,
+                "created_at": s.created_at.isoformat() if s.created_at else None
+            }
+            for s in sessoes
+        ],
+        "salas_criadas": [
+            {
+                "id": str(sala.id),
+                "nome": sala.nome,
+                "nome_url": sala.nome_url,
+                "is_secret_mode": sala.is_secret_mode,
+                "created_at": sala.created_at.isoformat() if sala.created_at else None
+            }
+            for sala in salas
+        ],
+        "estatisticas": {
+            "total_mensagens_enviadas": total_mensagens
+        }
+    }
+
+
 # --- COMPATIBILIDADE LEGADA: SALAS ZERO-LOGIN ---
 
 def ensure_room_membership(db: Session, sala_id: UUID, usuario_id: UUID, role: str = "padrao"):

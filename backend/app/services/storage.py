@@ -9,31 +9,58 @@ from fastapi import HTTPException, status
 from typing import Tuple
 
 ALLOWED_MIME_TYPES = {
+    # Imagens (RF02 / RF07)
     "image/jpeg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
-    "image/gif": "gif"
+    "image/gif": "gif",
+    # Áudios (RF02)
+    "audio/mpeg": "mp3",
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/webm": "weba",
+    "audio/x-wav": "wav",
+    "audio/mp4": "m4a",
+    # Documentos PDF (RF02)
+    "application/pdf": "pdf"
 }
 
 def validate_and_sanitize_image(file_bytes: bytes, filename: str) -> Tuple[bytes, str, str]:
     """
-    Zero-Trust em Uploads:
-    1. Validação por Magic Numbers / Bytes reais via filetype.
-    2. Rejeição de extensões mascaradas (ex: .exe renomeado para .png).
+    Zero-Trust em Uploads (RF02, RN04):
+    1. Validação por Magic Numbers / Bytes reais via filetype e headers nativos.
+    2. Rejeição de arquivos mascarados ou executáveis maliciosos.
     3. Remoção obrigatória de metadados EXIF das imagens.
+    4. Suporte a mídias de chat: Fotos, Áudios e Documentos PDF.
     """
     kind = filetype.guess(file_bytes)
-    if not kind or kind.mime not in ALLOWED_MIME_TYPES:
-        real_type = kind.mime if kind else "desconhecido"
+    real_mime = None
+    extension = None
+
+    if kind and kind.mime in ALLOWED_MIME_TYPES:
+        real_mime = kind.mime
+        extension = ALLOWED_MIME_TYPES[real_mime]
+    elif file_bytes.startswith(b"%PDF-"):
+        real_mime = "application/pdf"
+        extension = "pdf"
+    elif file_bytes.startswith(b"ID3") or file_bytes[:2] == b"\xff\xfb" or file_bytes[:2] == b"\xff\xf3":
+        real_mime = "audio/mpeg"
+        extension = "mp3"
+    elif file_bytes.startswith(b"RIFF") and b"WAVE" in file_bytes[:16]:
+        real_mime = "audio/wav"
+        extension = "wav"
+    elif file_bytes.startswith(b"OggS"):
+        real_mime = "audio/ogg"
+        extension = "ogg"
+
+    if not real_mime or real_mime not in ALLOWED_MIME_TYPES:
+        detected = kind.mime if kind else "desconhecido"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Arquivo rejeitado por Magic Byte. Tipo real detectado: '{real_type}'. Apenas imagens reais são permitidas."
+            detail=f"Arquivo rejeitado por Magic Byte. Tipo detectado: '{detected}'. Formatos permitidos: Imagens (JPG, PNG, WEBP, GIF), Áudios (MP3, WAV, OGG) e Documentos PDF."
         )
 
-    real_mime = kind.mime
-    extension = ALLOWED_MIME_TYPES[real_mime]
-
-    # Sanitização EXIF para JPEG, PNG, WEBP via Pillow
+    # Sanitização EXIF para JPEG, PNG, WEBP via Pillow (apenas para imagens)
     try:
         if real_mime in ["image/jpeg", "image/png", "image/webp"]:
             with Image.open(io.BytesIO(file_bytes)) as img:
