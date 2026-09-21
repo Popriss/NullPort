@@ -39,14 +39,34 @@ try:
     if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
         engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
     else:
-        engine = create_engine(
-            SQLALCHEMY_DATABASE_URL,
-            pool_pre_ping=True,  # Testa se a conexão está viva antes de usar; reconecta silenciosamente se estiver morta
-            pool_recycle=1800,   # Força a reciclagem de conexões mais velhas que 30 minutos (Supabase pooler timeout)
-            pool_size=10,        # Mantém até 10 conexões prontas no pool
-            max_overflow=20,     # Permite até 20 conexões extras em picos de tráfego
-            connect_args={"connect_timeout": 10}  # Evita bloqueio indefinido na conexão inicial
-        )
+        # Detecta se é Supabase Pooler em Transaction Mode (porta 6543)
+        is_transaction_pooler = ":6543" in SQLALCHEMY_DATABASE_URL
+
+        connect_args = {
+            "connect_timeout": 10,
+            "keepalives": 1,
+            "keepalives_idle": 30,       # Envia TCP KeepAlive a cada 30s para não deixar o NAT do Render fechar a conexão
+            "keepalives_interval": 10,
+            "keepalives_count": 3
+        }
+
+        if is_transaction_pooler:
+            from sqlalchemy.pool import NullPool
+            engine = create_engine(
+                SQLALCHEMY_DATABASE_URL,
+                poolclass=NullPool,       # Recomendado pelo Supabase/SQLAlchemy para PgBouncer Transaction Mode
+                pool_pre_ping=True,
+                connect_args=connect_args
+            )
+        else:
+            engine = create_engine(
+                SQLALCHEMY_DATABASE_URL,
+                pool_pre_ping=True,       # Testa a conexão antes de usar; reconecta silenciosamente se estiver morta
+                pool_recycle=60,          # Recicla conexões a cada 60s (evita que o pooler do Supabase feche conexões ociosas)
+                pool_size=5,              # Pool conservador para não esgotar as conexões do plano gratuito do Supabase
+                max_overflow=5,
+                connect_args=connect_args
+            )
 except Exception as e:
     print(f"[AVISO BANCO DE DADOS] Falha ao conectar em '{SQLALCHEMY_DATABASE_URL}': {e}. Usando SQLite local.")
     engine = create_engine("sqlite:///./nullport.db", connect_args={"check_same_thread": False})
