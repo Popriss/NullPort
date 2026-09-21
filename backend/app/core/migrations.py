@@ -118,6 +118,12 @@ def run_auto_migrations(engine):
 
         if dialect_name == "postgresql":
             with engine.connect() as conn:
+                try:
+                    conn.execute(text("SET lock_timeout = '4s';"))
+                    conn.execute(text("SET statement_timeout = '6s';"))
+                    conn.commit()
+                except Exception:
+                    pass
                 for sql_stmt in POSTGRES_MIGRATIONS:
                     try:
                         conn.execute(text(sql_stmt))

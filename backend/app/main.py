@@ -5,23 +5,28 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.migrations import run_auto_migrations
 
-# Sincroniza schema e executa migrações automáticas (garante criação de novas colunas no Supabase/Render)
-if engine:
-    try:
-        run_auto_migrations(engine)
-        Base.metadata.create_all(bind=engine)
-    except Exception as e:
-        print(f"Aviso ao inicializar tabelas e migrações: {e}")
-
 import asyncio
 from contextlib import asynccontextmanager
 from app.services.purge import run_purge_worker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Inicia a rotina de purga em segundo plano para salas e mensagens com TTL (Hard Wipe)
+    # Executa a sincronização do banco e migrações em background thread.
+    # Isso garante que o Uvicorn abra a porta imediatamente para o health check do Render!
+    async def init_db():
+        if engine:
+            try:
+                await asyncio.to_thread(run_auto_migrations, engine)
+                await asyncio.to_thread(Base.metadata.create_all, bind=engine)
+            except Exception as e:
+                print(f"[STARTUP DB WARNING] Falha na inicialização do banco: {e}")
+
+    db_task = asyncio.create_task(init_db())
     purge_task = asyncio.create_task(run_purge_worker(interval_seconds=15))
+
     yield
+
+    db_task.cancel()
     purge_task.cancel()
 
 app = FastAPI(
