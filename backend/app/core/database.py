@@ -39,7 +39,13 @@ try:
     if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
         engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
     else:
-        engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+        engine = create_engine(
+            SQLALCHEMY_DATABASE_URL,
+            pool_pre_ping=True,  # Testa se a conexão está viva antes de usar; reconecta silenciosamente se estiver morta
+            pool_recycle=1800,   # Força a reciclagem de conexões mais velhas que 30 minutos (Supabase pooler timeout)
+            pool_size=10,        # Mantém até 10 conexões prontas no pool
+            max_overflow=20      # Permite até 20 conexões extras em picos de tráfego
+        )
 except Exception as e:
     print(f"[AVISO BANCO DE DADOS] Falha ao conectar em '{SQLALCHEMY_DATABASE_URL}': {e}. Usando SQLite local.")
     engine = create_engine("sqlite:///./nullport.db", connect_args={"check_same_thread": False})
