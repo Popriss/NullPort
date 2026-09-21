@@ -19,6 +19,7 @@ import {
 import { compressImage } from '../utils/compression';
 import { isImageUrl, isAudioUrl, isPdfUrl } from '../utils/regex';
 import { initScreenProtection } from '../utils/screenProtection';
+import { parseUtcDate, formatMessageTime, formatMessageDateTime } from '../utils/date';
 import Button from '../components/Button';
 import ModerationDrawer from './ModerationDrawer';
 import ViewOnceModal from './ViewOnceModal';
@@ -130,7 +131,8 @@ export default function ChatBox({
       setMessages((prev) => {
         const active = prev.filter((m) => {
           if (!m.expires_at) return true;
-          return new Date(m.expires_at).getTime() > now;
+          const exp = parseUtcDate(m.expires_at);
+          return exp ? exp.getTime() > now : true;
         });
         return active.length !== prev.length ? active : prev;
       });
@@ -871,9 +873,9 @@ export default function ChatBox({
           messages.map((msg, index) => {
             const prevMsg = index > 0 ? messages[index - 1] : null;
             const isSameAuthor = prevMsg && prevMsg.autor_nickname === msg.autor_nickname;
-            const timeDiff = prevMsg
-              ? (new Date(msg.created_at) - new Date(prevMsg.created_at)) / (1000 * 60)
-              : 999;
+            const prevTime = prevMsg ? parseUtcDate(prevMsg.created_at)?.getTime() : null;
+            const currTime = parseUtcDate(msg.created_at)?.getTime();
+            const timeDiff = prevTime && currTime ? (currTime - prevTime) / (1000 * 60) : 999;
             const isConsecutive = isSameAuthor && timeDiff < 3 && !msg.reply_to_id;
             const isMe = msg.autor_nickname === user?.nickname;
             const isImage = isImageUrl(msg.conteudo.trim());
@@ -911,8 +913,8 @@ export default function ChatBox({
                         MOD
                       </span>
                     )}
-                    <span className="text-[10px] text-zinc-500">
-                      • {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    <span className="text-[10px] text-zinc-500" title={formatMessageDateTime(msg.created_at)}>
+                      • {formatMessageTime(msg.created_at)}
                     </span>
                   </div>
                 )}
@@ -1058,7 +1060,7 @@ export default function ChatBox({
                           <span>⏱️</span>
                           <span>
                             {msg.expires_at
-                              ? `${Math.max(0, Math.ceil((new Date(msg.expires_at).getTime() - Date.now()) / 1000))}s`
+                              ? `${Math.max(0, Math.ceil(((parseUtcDate(msg.expires_at)?.getTime() || 0) - Date.now()) / 1000))}s`
                               : `${msg.ttl_seconds}s`}
                           </span>
                         </span>

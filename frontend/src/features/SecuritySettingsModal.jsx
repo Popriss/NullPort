@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { listSessions, revokeSession, revokeOtherSessions, deleteAccount, exportUserData } from '../services/auth';
 import { fetchBlockedUsers, unblockUser } from '../services/chat';
+import { formatMessageTime, formatMessageDate } from '../utils/date';
 
 export default function SecuritySettingsModal({ isOpen, onClose, onAccountDeleted }) {
   const [activeTab, setActiveTab] = useState('sessions'); // 'sessions' | 'blocked' | 'lgpd'
@@ -345,7 +346,7 @@ export default function SecuritySettingsModal({ isOpen, onClose, onAccountDelete
                         )}
                       </div>
                       <div style={{ color: '#64748b', fontSize: '12px', marginTop: '4px' }}>
-                        IP: {s.ip_address || '127.0.0.1'} • Visto em: {new Date(s.last_active_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        IP: {s.ip_address || '127.0.0.1'} • Visto em: {formatMessageTime(s.last_active_at)}
                       </div>
                     </div>
 
@@ -405,7 +406,7 @@ export default function SecuritySettingsModal({ isOpen, onClose, onAccountDelete
                         @{u.nickname}
                       </div>
                       <div style={{ color: '#64748b', fontSize: '11px' }}>
-                        Bloqueado em {new Date(u.created_at).toLocaleDateString()}
+                        Bloqueado em {formatMessageDate(u.created_at)}
                       </div>
                     </div>
                     <button

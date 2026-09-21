@@ -11,9 +11,9 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from pydantic import BaseModel
 
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia, AuditLog, BloqueioUsuario, ReciboMensagem
-from app.schemas.chat import MessageCreate, MessageOut, BlockedUserOut, ReportCreate, ReactionCreate
+from app.schemas.chat import MessageCreate, MessageOut, BlockedUserOut, ReportCreate, ReactionCreate, to_utc_iso
 from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, MemberRoleUpdate, RoomJoinRequest, RoomJoinByUrlRequest
 from app.services.auth import decode_access_token, get_password_hash, verify_password
 from app.services.sse import manager
@@ -639,8 +639,7 @@ class TypingEventRequest(BaseModel):
 async def broadcast_typing_indicator(
     room_id: UUID,
     req: Optional[TypingEventRequest] = None,
-    user: Usuario = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    user: Usuario = Depends(get_current_user)
 ):
     """
     Transmite evento efêmero SSE 'typing' sem qualquer gravação no banco de dados.
@@ -765,20 +764,17 @@ async def send_room_message(
     rate_limiter.check_message_rate(str(user.id))
 
     # 4. Verifica se o usuário foi bloqueado por algum membro da sala (RF06)
-    outros_membros = db.query(MembroSala).filter(
+    bloqueio = db.query(BloqueioUsuario).join(
+        MembroSala, MembroSala.usuario_id == BloqueioUsuario.usuario_id
+    ).filter(
         MembroSala.sala_id == room_id,
-        MembroSala.usuario_id != user.id
-    ).all()
-    for om in outros_membros:
-        bloqueio = db.query(BloqueioUsuario).filter(
-            BloqueioUsuario.usuario_id == om.usuario_id,
-            BloqueioUsuario.bloqueado_id == user.id
-        ).first()
-        if bloqueio:
-            raise HTTPException(
-                status_code=403,
-                detail="Mensagem não entregue. Você foi bloqueado por um participante desta sala."
-            )
+        BloqueioUsuario.bloqueado_id == user.id
+    ).first()
+    if bloqueio:
+        raise HTTPException(
+            status_code=403,
+            detail="Mensagem não entregue. Você foi bloqueado por um participante desta sala."
+        )
 
     # 5. Define modo secreto herdado da sala ou da mensagem (RF03)
     room = db.query(Sala).filter(Sala.id == room_id).first()
@@ -819,12 +815,12 @@ async def send_room_message(
         "autor_id": str(new_msg.autor_id),
         "autor_nickname": new_msg.autor_nickname,
         "conteudo": new_msg.conteudo,
-        "created_at": new_msg.created_at.isoformat(),
+        "created_at": to_utc_iso(new_msg.created_at),
         "reply_to_id": str(new_msg.reply_to_id) if new_msg.reply_to_id else None,
         "reacoes": new_msg.reacoes,
         "is_secret_mode": new_msg.is_secret_mode,
         "ttl_seconds": new_msg.ttl_seconds,
-        "expires_at": new_msg.expires_at.isoformat() if new_msg.expires_at else None,
+        "expires_at": to_utc_iso(new_msg.expires_at),
         "is_view_once": new_msg.is_view_once,
         "is_e2ee": new_msg.is_e2ee,
         "e2ee_envelope": new_msg.e2ee_envelope,
@@ -931,7 +927,7 @@ async def send_message_legacy(
         "sala_id": str(new_msg.sala_id),
         "autor_nickname": new_msg.autor_nickname,
         "conteudo": new_msg.conteudo,
-        "created_at": new_msg.created_at.isoformat(),
+        "created_at": to_utc_iso(new_msg.created_at),
         "reply_to_id": str(new_msg.reply_to_id) if new_msg.reply_to_id else None,
         "reacoes": new_msg.reacoes
     }
@@ -981,8 +977,7 @@ async def react_to_message(
 async def chat_stream(
     request: Request,
     token: str,
-    room_id: Optional[str] = None,
-    db: Session = Depends(get_db)
+    room_id: Optional[str] = None
 ):
     payload = decode_access_token(token)
     if not payload:
@@ -1002,15 +997,16 @@ async def chat_stream(
     except ValueError:
         raise HTTPException(status_code=400, detail="Identificador inválido.")
 
-    # Validar se o usuário é membro da sala ou site admin
-    user = db.query(Usuario).filter(Usuario.id == user_uuid).first()
-    if not (user and user.is_site_admin):
-        membro = db.query(MembroSala).filter(
-            MembroSala.sala_id == sala_uuid,
-            MembroSala.usuario_id == user_uuid
-        ).first()
-        if not membro:
-            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
+    # Validar se o usuário é membro da sala ou site admin com sessão pontual fechada imediatamente
+    with SessionLocal() as db:
+        user = db.query(Usuario).filter(Usuario.id == user_uuid).first()
+        if not (user and user.is_site_admin):
+            membro = db.query(MembroSala).filter(
+                MembroSala.sala_id == sala_uuid,
+                MembroSala.usuario_id == user_uuid
+            ).first()
+            if not membro:
+                raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
 
     queue = await manager.connect(str(sala_id), user_id=str(user_uuid))
 
@@ -1116,7 +1112,7 @@ def create_report(
                 "id": str(m.id),
                 "autor_nickname": m.autor_nickname,
                 "conteudo": m.conteudo,
-                "created_at": m.created_at.isoformat()
+                "created_at": to_utc_iso(m.created_at)
             }
             for m in reversed(msgs)
         ]
@@ -1255,14 +1251,14 @@ async def mark_message_as_read(
             "message_id": str(msg.id),
             "sala_id": str(msg.sala_id),
             "ttl_seconds": msg.ttl_seconds,
-            "expires_at": msg.expires_at.isoformat()
+            "expires_at": to_utc_iso(msg.expires_at)
         })
 
     return {
         "status": "read",
         "message_id": str(msg.id),
         "ttl_triggered": ttl_triggered,
-        "expires_at": msg.expires_at.isoformat() if msg.expires_at else None
+        "expires_at": to_utc_iso(msg.expires_at)
     }
 
 

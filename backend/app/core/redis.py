@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Callable, Dict, Set, Optional
 from app.core.config import settings
 
@@ -64,9 +65,15 @@ class RedisPubSubBroker(PubSubBroker):
         self._fallback = InMemoryPubSubBroker()
         self._listener_task: Optional[asyncio.Task] = None
         self._is_connected = False
+        self._last_fail_time: float = 0.0
 
     async def _init_redis(self):
         if self._redis is not None or not self.redis_url:
+            return
+
+        now = time.time()
+        # Se falhou há menos de 30s, preserva o fallback sem bloquear novas chamadas
+        if now - self._last_fail_time < 30.0:
             return
 
         try:
@@ -74,11 +81,11 @@ class RedisPubSubBroker(PubSubBroker):
             self._redis = aioredis.from_url(
                 self.redis_url,
                 decode_responses=True,
-                socket_connect_timeout=3,
-                socket_timeout=3
+                socket_connect_timeout=2,
+                socket_timeout=2
             )
-            # Testa conexão
-            await self._redis.ping()
+            # Testa conexão com timeout defensivo de 2s
+            await asyncio.wait_for(self._redis.ping(), timeout=2.0)
             self._pubsub = self._redis.pubsub()
             self._is_connected = True
             logger.info("Conectado com sucesso ao Upstash / Redis PubSub.")
@@ -87,6 +94,7 @@ class RedisPubSubBroker(PubSubBroker):
             self._redis = None
             self._pubsub = None
             self._is_connected = False
+            self._last_fail_time = now
 
     async def _listen_loop(self):
         try:
@@ -111,14 +119,17 @@ class RedisPubSubBroker(PubSubBroker):
 
     async def publish(self, channel: str, message: str) -> None:
         await self._init_redis()
-        # Notifica inscritos locais e do fallback
+        # Notifica inscritos locais e do fallback imediatamente
         await self._fallback.publish(channel, message)
 
         if self._is_connected and self._redis:
             try:
-                await self._redis.publish(channel, message)
+                await asyncio.wait_for(self._redis.publish(channel, message), timeout=2.0)
             except Exception as e:
                 logger.error(f"Falha ao publicar evento no Redis: {e}")
+                self._is_connected = False
+                self._redis = None
+                self._last_fail_time = time.time()
 
     async def subscribe(self, channel: str, callback: Callable[[str, str], None]) -> None:
         await self._init_redis()

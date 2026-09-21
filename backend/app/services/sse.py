@@ -122,19 +122,29 @@ class ConnectionManager:
         s_id = str(sala_id)
         return set(self.room_users.get(s_id, {}).keys())
 
+    async def _safe_broker_publish(self, channel: str, envelope: str):
+        try:
+            await asyncio.wait_for(self.broker.publish(channel, envelope), timeout=2.0)
+        except Exception:
+            pass
+
     async def broadcast_to_room(self, sala_id: str, message_data: dict):
         s_id = str(sala_id)
         # 1. Entrega local imediata para clientes conectados nesta réplica
         await self._deliver_local(s_id, message_data)
 
-        # 2. Publica no canal Redis/PubSub para retransmissão para as demais réplicas
+        # 2. Publica no canal Redis/PubSub para as demais réplicas sem bloquear o request HTTP
         if self.broker:
             channel = self._channel_name(s_id)
             envelope = json.dumps({
                 "_sender_instance": self.instance_id,
                 "data": message_data
             }, default=str)
-            await self.broker.publish(channel, envelope)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._safe_broker_publish(channel, envelope))
+            except RuntimeError:
+                pass
 
 
 manager = ConnectionManager()

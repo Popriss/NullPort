@@ -7,6 +7,7 @@ import {
   exportRoomHistory,
   blockUser
 } from '../services/chat';
+import { formatMessageDateTime } from '../utils/date';
 
 export default function ModerationDrawer({
   isOpen,
@@ -521,7 +522,7 @@ export default function ModerationDrawer({
                       delete_subroom: 'border-rose-600/30 bg-rose-600/10 text-rose-300',
                     };
                     const badgeClass = actionColors[log.action] || 'border-zinc-700 bg-zinc-800 text-zinc-300';
-                    const dateStr = new Date(log.created_at).toLocaleString('pt-BR');
+                    const dateStr = formatMessageDateTime(log.created_at);
 
                     return (
                       <div
