@@ -11,12 +11,18 @@ import {
   banMember,
   fetchRoomMembers,
   updateMemberRole,
-  sendTyping
+  sendTyping,
+  markMessageRead,
+  markMessageDelivered,
+  submitReport
 } from '../services/chat';
 import { compressImage } from '../utils/compression';
 import { isImageUrl } from '../utils/regex';
+import { initScreenProtection } from '../utils/screenProtection';
 import Button from '../components/Button';
 import ModerationDrawer from './ModerationDrawer';
+import ViewOnceModal from './ViewOnceModal';
+import SecuritySettingsModal from './SecuritySettingsModal';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
@@ -104,6 +110,44 @@ export default function ChatBox({
   // Estados V3 para Indicador de Digitação (Typing Indicator)
   const [typingUsers, setTypingUsers] = useState({}); // { [nickname]: timestamp }
   const typingTimeoutRef = useRef(null);
+
+  // Estados PRD Avançados (RF01-RF07, RN01-RN07)
+  const [ttlSeconds, setTtlSeconds] = useState(null); // RF04: TTL pós-leitura
+  const [isViewOnce, setIsViewOnce] = useState(false); // RF07: Mídia de visualização única
+  const [activeViewOnceId, setActiveViewOnceId] = useState(null); // RF07: Modal de visualização
+  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false); // RF01/RN06: Central de segurança
+
+  // RN02: Inicialização da proteção de tela e anti-captura web
+  useEffect(() => {
+    const cleanup = initScreenProtection();
+    return cleanup;
+  }, []);
+
+  // RF04: Purga visual em tempo real no cliente para mensagens cujo TTL expirou
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setMessages((prev) => {
+        const active = prev.filter((m) => {
+          if (!m.expires_at) return true;
+          return new Date(m.expires_at).getTime() > now;
+        });
+        return active.length !== prev.length ? active : prev;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // RF05: Confirmação automática de leitura quando as mensagens são visualizadas na tela
+  useEffect(() => {
+    if (document.hasFocus() && messages.length > 0) {
+      messages.forEach((m) => {
+        if (m.autor_nickname !== user?.nickname && m.status_recibo !== 'read') {
+          markMessageRead(m.id);
+        }
+      });
+    }
+  }, [messages, user]);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -278,9 +322,14 @@ export default function ChatBox({
 
   const notifyNewMessage = (msg) => {
     if (document.hidden && "Notification" in window && Notification.permission === "granted") {
-      new Notification(`Nova mensagem em #${roomTitle}`, {
-        body: `${msg.autor_nickname}: ${msg.conteudo.slice(0, 80)}`,
-        icon: '/favicon.ico',
+      // RN05: Notificações cegas do SO para chats efêmeros e secretos
+      const isBlind = msg.is_secret_mode || activeRoom?.is_secret_mode || Boolean(msg.ttl_seconds) || msg.is_view_once;
+      const notifTitle = isBlind ? 'NullPort' : `Nova mensagem em #${roomTitle}`;
+      const notifBody = isBlind ? 'Nova mensagem confidencial recebida.' : `${msg.autor_nickname}: ${msg.conteudo.slice(0, 80)}`;
+
+      new Notification(notifTitle, {
+        body: notifBody,
+        icon: '/favicon.svg',
       });
     }
   };
@@ -380,6 +429,46 @@ export default function ChatBox({
         return;
       }
 
+      // RF05: Confirmação de Leitura (Ticks ✓✓ esmeralda)
+      if (eventData.type === "message_read") {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === eventData.message_id ? { ...m, status_recibo: 'read' } : m
+          )
+        );
+        return;
+      }
+
+      // RF05: Confirmação de Entrega (Ticks ✓✓ cinza)
+      if (eventData.type === "message_delivered") {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === eventData.message_id && m.status_recibo !== 'read'
+              ? { ...m, status_recibo: 'delivered' }
+              : m
+          )
+        );
+        return;
+      }
+
+      // RF04: Gatilho de Autodestruição pós-leitura (Início do TTL)
+      if (eventData.type === "ttl_started") {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === eventData.message_id
+              ? { ...m, expires_at: eventData.expires_at, ttl_seconds: eventData.ttl_seconds }
+              : m
+          )
+        );
+        return;
+      }
+
+      // RN03 / RF07: Retenção Zero / Hard Wipe de mensagem/mídia em tempo real
+      if (eventData.type === "message_destroyed") {
+        setMessages((prev) => prev.filter((m) => m.id !== eventData.message_id));
+        return;
+      }
+
       // Mensagem nova
       const newMessage = eventData;
       setMessages((prev) => {
@@ -470,10 +559,15 @@ export default function ChatBox({
       setSending(true);
 
       if (activeRoom?.id) {
-        await sendRoomMessage(activeRoom.id, textToSend, replyId);
+        await sendRoomMessage(activeRoom.id, textToSend, replyId, {
+          ttl_seconds: ttlSeconds,
+          is_view_once: isViewOnce,
+          is_secret_mode: activeRoom?.is_secret_mode
+        });
       } else {
         await sendMessage(textToSend, replyId);
       }
+      setIsViewOnce(false);
       // Garante scroll até a própria mensagem recém-enviada
       scrollToBottom(true);
       setShowScrollBottomButton(false);
@@ -514,10 +608,15 @@ export default function ChatBox({
 
       const replyId = replyingTo ? replyingTo.id : null;
       if (activeRoom?.id) {
-        await sendRoomMessage(activeRoom.id, url, replyId);
+        await sendRoomMessage(activeRoom.id, url, replyId, {
+          ttl_seconds: ttlSeconds,
+          is_view_once: isViewOnce,
+          is_secret_mode: activeRoom?.is_secret_mode
+        });
       } else {
         await sendMessage(url, replyId);
       }
+      setIsViewOnce(false);
       setReplyingTo(null);
       scrollToBottom(true);
       showToast("Imagem comprimida e enviada com sucesso!", "success");
@@ -698,6 +797,11 @@ export default function ChatBox({
                   Efêmera (TTL)
                 </span>
               )}
+              {activeRoom?.is_secret_mode && (
+                <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold flex items-center gap-1">
+                  🔒 MODO SECRETO
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-zinc-400 flex items-center gap-1.5">
               <span>Conectado como</span>
@@ -710,6 +814,15 @@ export default function ChatBox({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsSecurityModalOpen(true)}
+            className="text-xs font-semibold min-h-[44px] py-1.5 px-3 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 transition-all flex items-center gap-1.5 cursor-pointer"
+            title="Central de Segurança & Privacidade (Sessões e LGPD)"
+          >
+            <span>🛡️</span>
+            <span className="hidden sm:inline">Segurança</span>
+          </button>
+
           {isCanModerate && (
             <button
               onClick={() => {
@@ -718,7 +831,7 @@ export default function ChatBox({
               }}
               className="text-xs font-semibold min-h-[44px] py-1.5 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/60 transition-all flex items-center gap-1.5 cursor-pointer"
             >
-              <span>🛡️</span>
+              <span>⚙️</span>
               <span className="hidden sm:inline">Moderação</span>
             </button>
           )}
@@ -824,7 +937,23 @@ export default function ChatBox({
                       </div>
                     )}
 
-                    {isImage ? (
+                    {msg.is_view_once ? (
+                      <div
+                        onClick={() => setActiveViewOnceId(msg.id)}
+                        className="flex items-center gap-3 p-3 rounded-xl bg-black/40 border border-emerald-500/40 hover:border-emerald-400 cursor-pointer transition-all shadow-md group select-none"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center text-lg group-hover:scale-105 transition-transform">
+                          📷
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-emerald-300 flex items-center gap-1">
+                            <span>Foto de Visualização Única</span>
+                            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded-full font-mono">1x</span>
+                          </div>
+                          <div className="text-[11px] text-zinc-400">Toque para abrir (se autodestrói ao fechar)</div>
+                        </div>
+                      </div>
+                    ) : isImage ? (
                       <img
                         src={msg.conteudo.trim()}
                         alt="Anexo de mídia"
@@ -878,9 +1007,43 @@ export default function ChatBox({
                         >
                           {msg.conteudo}
                         </ReactMarkdown>
-
                       </div>
                     )}
+
+                    {/* Metadados: Ticks de Leitura e Contagem Regressiva de TTL */}
+                    <div className="flex items-center gap-1.5 mt-1.5 justify-end">
+                      {msg.ttl_seconds && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono flex items-center gap-1">
+                          <span>⏱️</span>
+                          <span>
+                            {msg.expires_at
+                              ? `${Math.max(0, Math.ceil((new Date(msg.expires_at).getTime() - Date.now()) / 1000))}s`
+                              : `${msg.ttl_seconds}s`}
+                          </span>
+                        </span>
+                      )}
+
+                      {isMe && (
+                        <span
+                          className="text-[11px] font-mono select-none"
+                          title={
+                            msg.status_recibo === 'read'
+                              ? 'Lido (✓✓)'
+                              : msg.status_recibo === 'delivered'
+                              ? 'Entregue (✓✓)'
+                              : 'Enviado (✓)'
+                          }
+                        >
+                          {msg.status_recibo === 'read' ? (
+                            <span className="text-emerald-300 font-bold">✓✓</span>
+                          ) : msg.status_recibo === 'delivered' ? (
+                            <span className="text-zinc-400 font-bold">✓✓</span>
+                          ) : (
+                            <span className="text-zinc-500">✓</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
 
                     {/* Reações com Emojis */}
                     {msg.reacoes && Object.keys(msg.reacoes).length > 0 && (
@@ -974,6 +1137,30 @@ export default function ChatBox({
                         >
                           <span>📋</span>
                           <span>Copiar mensagem</span>
+                        </button>
+
+                        {/* Opção Denunciar Mensagem (RF06) */}
+                        <button
+                          onClick={async () => {
+                            const motivo = prompt('Informe o motivo da denúncia:');
+                            if (motivo && motivo.trim()) {
+                              try {
+                                const res = await submitReport({
+                                  mensagem_id: msg.id,
+                                  sala_id: roomId,
+                                  motivo: motivo.trim()
+                                });
+                                showToast(res.message, 'info');
+                              } catch (e) {
+                                showToast(e.message || 'Erro ao denunciar', 'error');
+                              }
+                            }
+                            setActiveMenuId(null);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] sm:min-h-[34px] text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer text-left"
+                        >
+                          <span>⚠️</span>
+                          <span>Denunciar</span>
                         </button>
                       </div>
                     )}
@@ -1099,6 +1286,42 @@ export default function ChatBox({
             {uploading ? '⏳' : '📷'}
           </button>
 
+          {/* Botão de Foto de Visualização Única (RF07) */}
+          <button
+            type="button"
+            onClick={() => setIsViewOnce((prev) => !prev)}
+            disabled={isInputDisabled}
+            className={`min-h-[44px] min-w-[40px] flex items-center justify-center p-2 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
+              isViewOnce
+                ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/60 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
+            }`}
+            title={isViewOnce ? "Visualização única ATIVA: a mídia será destruída após aberta (RF07)" : "Ativar envio de visualização única (RF07)"}
+          >
+            1️⃣
+          </button>
+
+          {/* Seletor de Temporizador de Autodestruição pós-leitura (RF04) */}
+          <select
+            value={ttlSeconds === null ? '' : ttlSeconds}
+            onChange={(e) => setTtlSeconds(e.target.value ? Number(e.target.value) : null)}
+            disabled={isInputDisabled}
+            className={`min-h-[44px] px-2 rounded-lg text-xs font-mono border transition-all cursor-pointer ${
+              ttlSeconds
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border-zinc-700/60'
+            }`}
+            title="Temporizador de autodestruição pós-leitura (RF04)"
+          >
+            <option value="">⏱️ Sem TTL</option>
+            <option value="5">⏱️ 5s</option>
+            <option value="30">⏱️ 30s</option>
+            <option value="60">⏱️ 1m</option>
+            <option value="300">⏱️ 5m</option>
+            <option value="3600">⏱️ 1h</option>
+            <option value="86400">⏱️ 24h</option>
+          </select>
+
           <textarea
             value={input}
             onChange={handleInputChange}
@@ -1207,6 +1430,21 @@ export default function ChatBox({
           </div>
         ))}
       </div>
+
+      {/* Modal de Mídia de Visualização Única (RF07) */}
+      {activeViewOnceId && (
+        <ViewOnceModal
+          messageId={activeViewOnceId}
+          onClose={() => setActiveViewOnceId(null)}
+        />
+      )}
+
+      {/* Central de Segurança e Privacidade (RF01, RF06, RN06) */}
+      <SecuritySettingsModal
+        isOpen={isSecurityModalOpen}
+        onClose={() => setIsSecurityModalOpen(false)}
+        onAccountDeleted={onLogout}
+      />
     </div>
   );
 }

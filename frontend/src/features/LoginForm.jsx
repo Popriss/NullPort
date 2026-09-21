@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import GalaxyCanvas from '../components/GalaxyCanvas';
-import { loginUser, registerUser, enterRoom } from '../services/auth';
+import { loginUser, registerUser, enterRoom, sendOtp, verifyOtp } from '../services/auth';
 
 /**
  * LoginForm — Design Minimalista, Tech & Funcional
@@ -12,13 +12,21 @@ import { loginUser, registerUser, enterRoom } from '../services/auth';
  * - Coluna Direita: Console de autenticação minimalista com inputs com ícones, password toggles e switcher rápido.
  */
 export default function LoginForm({ onLoginSuccess }) {
-  const [mainTab, setMainTab] = useState('account'); // 'account' | 'ephemeral'
+  const [mainTab, setMainTab] = useState('account'); // 'account' | 'ephemeral' | 'otp'
   const [accountMode, setAccountMode] = useState('login'); // 'login' | 'register'
   const [loginId, setLoginId] = useState('');
   const [senha, setSenha] = useState('');
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
   const [nomeUrl, setNomeUrl] = useState('');
+  
+  // Estados para SMS OTP (RF01)
+  const [phone, setPhone] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpStep, setOtpStep] = useState('phone'); // 'phone' | 'verify'
+  const [otpNickname, setOtpNickname] = useState('');
+  const [otpSuccessMsg, setOtpSuccessMsg] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [coldStartNotice, setColdStartNotice] = useState(false);
@@ -80,6 +88,21 @@ export default function LoginForm({ onLoginSuccess }) {
           nome_url: data.nome_url,
           is_legacy_room: true,
         });
+      } else if (mainTab === 'otp') {
+        if (otpStep === 'phone') {
+          if (!phone.trim()) throw new Error('Informe o número do seu celular.');
+          const res = await sendOtp(phone.trim());
+          setOtpSuccessMsg(res.message || 'Código SMS enviado com sucesso!');
+          setOtpStep('verify');
+        } else {
+          if (!otpCode.trim()) throw new Error('Informe o código SMS de 6 dígitos.');
+          const data = await verifyOtp({
+            telefone: phone.trim(),
+            codigo: otpCode.trim(),
+            nickname: otpNickname.trim() || undefined
+          });
+          onLoginSuccess(data.user);
+        }
       }
     } catch (err) {
       setError(err.message || 'Falha na autenticação.');
@@ -186,6 +209,8 @@ export default function LoginForm({ onLoginSuccess }) {
                 <span>
                   {mainTab === 'account'
                     ? (accountMode === 'login' ? 'Entrar na Plataforma' : 'Cadastrar Operador')
+                    : mainTab === 'otp'
+                    ? 'Autenticação Rápida SMS OTP'
                     : 'Acesso Direto / Sala Efêmera'}
                 </span>
               </h2>
@@ -194,36 +219,50 @@ export default function LoginForm({ onLoginSuccess }) {
                   ? (accountMode === 'login'
                       ? 'Autentique com suas credenciais para gerenciar seus canais.'
                       : 'Crie uma conta para criar salas permanentes e moderar canais.')
+                  : mainTab === 'otp'
+                  ? 'Acesso sem senha com envio de código SMS de alta velocidade.'
                   : 'Acesse uma sala temporária diretamente por URL sem criar conta.'}
               </p>
             </div>
           </div>
 
-          {/* Duas Abas Principais: 'Minha Conta' vs 'Acesso Direto / Sala Efêmera' */}
+          {/* Três Abas Principais: 'Minha Conta', 'SMS OTP' e 'Acesso Direto' */}
           <div className="flex rounded-xl bg-black/70 p-1 border border-zinc-800/80 text-xs font-mono gap-1">
             <button
               type="button"
               onClick={() => { setMainTab('account'); setError(''); }}
-              className={`flex-1 py-2.5 px-3 rounded-lg font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+              className={`flex-1 py-2.5 px-2 rounded-lg font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 ${
                 mainTab === 'account'
                   ? 'bg-emerald-500 text-[#050a08] shadow-[0_0_15px_rgba(16,185,129,0.3)]'
                   : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
               }`}
             >
               <span>👤</span>
-              <span>Minha Conta</span>
+              <span>Conta</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMainTab('otp'); setError(''); }}
+              className={`flex-1 py-2.5 px-2 rounded-lg font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                mainTab === 'otp'
+                  ? 'bg-emerald-500 text-[#050a08] shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+              }`}
+            >
+              <span>📱</span>
+              <span>SMS OTP</span>
             </button>
             <button
               type="button"
               onClick={() => { setMainTab('ephemeral'); setError(''); }}
-              className={`flex-1 py-2.5 px-3 rounded-lg font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+              className={`flex-1 py-2.5 px-2 rounded-lg font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 ${
                 mainTab === 'ephemeral'
                   ? 'bg-emerald-500 text-[#050a08] shadow-[0_0_15px_rgba(16,185,129,0.3)]'
                   : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
               }`}
             >
               <span>🚪</span>
-              <span>Acesso Direto</span>
+              <span>Direto</span>
             </button>
           </div>
 
@@ -372,6 +411,91 @@ export default function LoginForm({ onLoginSuccess }) {
                     className="hover:text-emerald-400 transition-colors cursor-pointer"
                   >
                     Já possui credenciais? <span className="underline decoration-emerald-500/40">Entrar na conta</span>
+                  </button>
+                </div>
+              </>
+            )}
+
+            {mainTab === 'otp' && (
+              <>
+                <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-emerald-300 text-[11px] font-mono leading-relaxed">
+                  <span className="font-bold text-emerald-400">⚡ SMS RÁPIDO:</span> Autentique-se via código único de 6 dígitos enviado ao seu celular. Se o número não for cadastrado, uma nova conta será provisionada instantaneamente.
+                </div>
+
+                {otpSuccessMsg && (
+                  <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-mono flex items-center gap-2">
+                    <span>✓</span>
+                    <span>{otpSuccessMsg}</span>
+                  </div>
+                )}
+
+                {otpStep === 'phone' ? (
+                  <>
+                    <Input
+                      label="Número de Telefone Celular"
+                      icon="📱"
+                      type="tel"
+                      placeholder="+55 11 99999-8888"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      required
+                      autoFocus
+                    />
+                    <Button
+                      type="submit"
+                      className="w-full mt-3 py-3"
+                      loading={loading}
+                      disabled={loading}
+                    >
+                      Enviar Código por SMS →
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      label="Código de Confirmação SMS (6 dígitos)"
+                      icon="🔑"
+                      placeholder="ex: 123456"
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value)}
+                      maxLength={6}
+                      required
+                      autoFocus
+                    />
+                    <Input
+                      label="Seu Nickname (opcional para novos cadastros)"
+                      icon="👤"
+                      placeholder="ex: CyberAgent"
+                      value={otpNickname}
+                      onChange={(e) => setOtpNickname(e.target.value)}
+                    />
+                    <Button
+                      type="submit"
+                      className="w-full mt-3 py-3"
+                      loading={loading}
+                      disabled={loading}
+                    >
+                      Validar Código e Entrar →
+                    </Button>
+                    <div className="pt-2 text-center text-[11px] font-mono text-zinc-500">
+                      <button
+                        type="button"
+                        onClick={() => { setOtpStep('phone'); setOtpCode(''); setOtpSuccessMsg(''); setError(''); }}
+                        className="hover:text-emerald-400 transition-colors cursor-pointer"
+                      >
+                        ← Alterar número de telefone
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                <div className="pt-2 text-center text-[11px] font-mono text-zinc-500 border-t border-zinc-900">
+                  <button
+                    type="button"
+                    onClick={() => { setMainTab('account'); setError(''); }}
+                    className="hover:text-emerald-400 transition-colors cursor-pointer"
+                  >
+                    Prefere entrar com e-mail e senha? <span className="underline decoration-emerald-500/40">Entrar com credenciais</span>
                   </button>
                 </div>
               </>

@@ -177,15 +177,24 @@ export async function fetchRoomMessages(roomId) {
   return response.json();
 }
 
-export async function sendRoomMessage(roomId, conteudo, replyToId = null) {
+export async function sendRoomMessage(roomId, conteudo, replyToId = null, extra = {}) {
   const token = getToken();
+  const body = {
+    conteudo,
+    reply_to_id: replyToId,
+    is_secret_mode: Boolean(extra.is_secret_mode),
+    ttl_seconds: extra.ttl_seconds || null,
+    is_view_once: Boolean(extra.is_view_once),
+    is_e2ee: Boolean(extra.is_e2ee),
+    e2ee_envelope: extra.e2ee_envelope || null
+  };
   const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
     },
-    body: JSON.stringify({ conteudo, reply_to_id: replyToId })
+    body: JSON.stringify(body)
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
@@ -402,4 +411,111 @@ export async function exportRoomHistory(roomId, format = 'json', password) {
     throw new Error(err.detail || "Erro ao exportar histórico criptografado");
   }
   return response.blob();
-}
+}
+
+// --- RF06: Bloqueio de Usuários ---
+
+export async function blockUser(userId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/users/${userId}/block`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao bloquear usuário");
+  }
+  return response.json();
+}
+
+export async function unblockUser(userId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/users/${userId}/block`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao desbloquear usuário");
+  }
+  return response.json();
+}
+
+export async function fetchBlockedUsers() {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/users/blocked`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao listar usuários bloqueados");
+  }
+  return response.json();
+}
+
+// --- RF05 & RF04: Confirmação de Leitura e TTL ---
+
+export async function markMessageRead(messageId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/messages/${messageId}/read`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) return null;
+  return response.json();
+}
+
+export async function markMessageDelivered(messageId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/messages/${messageId}/delivered`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) return null;
+  return response.json();
+}
+
+// --- RF07: Mídia de Visualização Única (View-Once) ---
+
+export async function openViewOnceMedia(messageId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/messages/${messageId}/view-once/open`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao abrir mídia de visualização única");
+  }
+  return response.json();
+}
+
+export async function closeViewOnceMedia(messageId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/messages/${messageId}/view-once/close`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) return null;
+  return response.json();
+}
+
+// --- RF06: Denúncia com Snapshot Contextual ---
+
+export async function submitReport({ mensagem_id, sala_id, motivo }) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/reports`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ mensagem_id, sala_id, motivo })
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao registrar denúncia");
+  }
+  return response.json();
+}
+

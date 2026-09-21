@@ -121,6 +121,7 @@ def list_reports(
             "sala_id": str(r.sala_id),
             "motivo": r.motivo,
             "status": r.status,
+            "snapshot_mensagens": r.snapshot_mensagens or [],
             "created_at": r.created_at.isoformat()
         }
         for r in reports

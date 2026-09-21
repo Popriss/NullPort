@@ -4,8 +4,9 @@ from typing import Optional, Tuple
 from uuid import UUID
 
 from app.core.database import get_db
-from app.models.models import Usuario, MembroSala, Sala
+from app.models.models import Usuario, MembroSala, Sala, SessaoAtiva
 from app.services.auth import decode_access_token
+from datetime import datetime, timezone
 
 # Precedência numérica das permissões de chat (Local/Sala)
 ROLE_WEIGHTS = {
@@ -57,7 +58,21 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuário associado ao token não existe mais."
         )
-    
+
+    # Verificação de Revogação de Sessão (RF01)
+    jti = payload.get("jti")
+    if jti:
+        sessao = db.query(SessaoAtiva).filter(SessaoAtiva.token_jti == jti).first()
+        tem_sessoes_registradas = db.query(SessaoAtiva).filter(SessaoAtiva.usuario_id == user.id).first() is not None
+        if tem_sessoes_registradas and not sessao:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Sessão revogada ou expirada."
+            )
+        if sessao:
+            sessao.last_active_at = datetime.now(timezone.utc)
+            db.commit()
+
     return user
 
 

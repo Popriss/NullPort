@@ -12,12 +12,13 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia, AuditLog
-from app.schemas.chat import MessageCreate, MessageOut
+from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia, AuditLog, BloqueioUsuario, ReciboMensagem
+from app.schemas.chat import MessageCreate, MessageOut, BlockedUserOut, ReportCreate, ReactionCreate
 from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, MemberRoleUpdate, RoomJoinRequest, RoomJoinByUrlRequest
 from app.services.auth import decode_access_token, get_password_hash, verify_password
 from app.services.sse import manager
 from app.services.storage import validate_and_sanitize_image, upload_image_to_r2
+from app.services.purge import cleanup_message_media
 from app.services.export import export_room_history_encrypted
 from app.core.security import rate_limiter
 from app.core.rbac import get_current_user, require_chat_role, ROLE_WEIGHTS
@@ -39,13 +40,6 @@ def extract_mentions(content: str) -> List[str]:
     return result
 
 
-class ReactionCreate(BaseModel):
-    emoji: str
-
-class ReportCreate(BaseModel):
-    mensagem_id: UUID
-    sala_id: UUID
-    motivo: str
 
 # Helper para compatibilidade legada e nova autenticação
 def get_user_or_room_auth(
@@ -186,6 +180,7 @@ def create_room(
         parent_id=req.parent_id,
         tipo_sala=tipo,
         is_permanente=is_perm,
+        is_secret_mode=bool(req.is_secret_mode),
         expires_at=expires_at,
         max_membros=req.max_membros or 50,
         created_by=user.id
@@ -681,6 +676,12 @@ def export_room_history_endpoint(
     db: Session = Depends(get_db)
 ):
     """Exporta o histórico da sala protegido e criptografado por senha (restrito a Admin)."""
+    room = db.query(Sala).filter(Sala.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Sala não encontrada.")
+    if room.is_secret_mode:
+        raise HTTPException(status_code=403, detail="Exportação de histórico desativada para salas em Modo Secreto (Retenção Zero).")
+
     try:
         content_bytes, filename, media_type = export_room_history_encrypted(
             db=db,
@@ -763,20 +764,54 @@ async def send_room_message(
     # 3. Rate limit defensivo: 1 msg/segundo por usuário
     rate_limiter.check_message_rate(str(user.id))
 
-    # 4. Cria e persiste a mensagem
+    # 4. Verifica se o usuário foi bloqueado por algum membro da sala (RF06)
+    outros_membros = db.query(MembroSala).filter(
+        MembroSala.sala_id == room_id,
+        MembroSala.usuario_id != user.id
+    ).all()
+    for om in outros_membros:
+        bloqueio = db.query(BloqueioUsuario).filter(
+            BloqueioUsuario.usuario_id == om.usuario_id,
+            BloqueioUsuario.bloqueado_id == user.id
+        ).first()
+        if bloqueio:
+            raise HTTPException(
+                status_code=403,
+                detail="Mensagem não entregue. Você foi bloqueado por um participante desta sala."
+            )
+
+    # 5. Define modo secreto herdado da sala ou da mensagem (RF03)
+    room = db.query(Sala).filter(Sala.id == room_id).first()
+    is_secret = bool(msg_in.is_secret_mode) or (room and bool(room.is_secret_mode))
+
+    # 6. Cria e persiste a mensagem
     new_msg = Mensagem(
         sala_id=room_id,
         autor_id=user.id,
         autor_nickname=user.nickname,
         conteudo=msg_in.conteudo,
         reply_to_id=msg_in.reply_to_id,
-        reacoes={}
+        reacoes={},
+        is_secret_mode=is_secret,
+        ttl_seconds=msg_in.ttl_seconds,
+        is_view_once=bool(msg_in.is_view_once),
+        is_e2ee=bool(msg_in.is_e2ee),
+        e2ee_envelope=msg_in.e2ee_envelope
     )
     db.add(new_msg)
     db.commit()
     db.refresh(new_msg)
 
-    # 5. Broadcast em tempo real via SSE
+    # 7. Registra recibo 'sent' de envio (RF05)
+    recibo_sent = ReciboMensagem(
+        mensagem_id=new_msg.id,
+        usuario_id=user.id,
+        status="sent"
+    )
+    db.add(recibo_sent)
+    db.commit()
+
+    # 8. Broadcast em tempo real via SSE com metadados PRD
     msg_dict = {
         "type": "new_message",
         "id": str(new_msg.id),
@@ -786,7 +821,14 @@ async def send_room_message(
         "conteudo": new_msg.conteudo,
         "created_at": new_msg.created_at.isoformat(),
         "reply_to_id": str(new_msg.reply_to_id) if new_msg.reply_to_id else None,
-        "reacoes": new_msg.reacoes
+        "reacoes": new_msg.reacoes,
+        "is_secret_mode": new_msg.is_secret_mode,
+        "ttl_seconds": new_msg.ttl_seconds,
+        "expires_at": new_msg.expires_at.isoformat() if new_msg.expires_at else None,
+        "is_view_once": new_msg.is_view_once,
+        "is_e2ee": new_msg.is_e2ee,
+        "e2ee_envelope": new_msg.e2ee_envelope,
+        "status_recibo": "sent"
     }
     await manager.broadcast_to_room(str(room_id), msg_dict)
 
@@ -1033,13 +1075,299 @@ def create_report(
     user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Denúncia de abuso com tratamento diferenciado (RF06):
+    - Sala Permanente: anexa snapshot contextual das 5 mensagens anteriores.
+    - Sala Efêmera / Modo Secreto: retenção zero de histórico; aplica bloqueio preventivo mútuo.
+    """
+    sala = db.query(Sala).filter(Sala.id == req.sala_id).first()
+    if not sala:
+        raise HTTPException(status_code=404, detail="Sala não encontrada.")
+
+    alvo_msg = db.query(Mensagem).filter(Mensagem.id == req.mensagem_id).first()
+    if not alvo_msg:
+        raise HTTPException(status_code=404, detail="Mensagem denunciada não encontrada.")
+
+    snapshot = []
+    is_ephemeral = (sala.tipo_sala == "temporaria") or sala.is_secret_mode or alvo_msg.is_secret_mode
+
+    if is_ephemeral:
+        # Chats efêmeros: Retenção zero de histórico. Aplica bloqueio preventivo automático (RF06)
+        if alvo_msg.autor_id and alvo_msg.autor_id != user.id:
+            ja_bloqueado = db.query(BloqueioUsuario).filter(
+                BloqueioUsuario.usuario_id == user.id,
+                BloqueioUsuario.bloqueado_id == alvo_msg.autor_id
+            ).first()
+            if not ja_bloqueado:
+                bloqueio_prev = BloqueioUsuario(usuario_id=user.id, bloqueado_id=alvo_msg.autor_id)
+                db.add(bloqueio_prev)
+        report_msg = "Denúncia registrada com bloqueio preventivo (chat efêmero com retenção zero de histórico)."
+    else:
+        # Chats permanentes: captura snapshot das últimas 5 mensagens
+        msgs = (
+            db.query(Mensagem)
+            .filter(Mensagem.sala_id == req.sala_id, Mensagem.created_at <= alvo_msg.created_at)
+            .order_by(Mensagem.created_at.desc())
+            .limit(5)
+            .all()
+        )
+        snapshot = [
+            {
+                "id": str(m.id),
+                "autor_nickname": m.autor_nickname,
+                "conteudo": m.conteudo,
+                "created_at": m.created_at.isoformat()
+            }
+            for m in reversed(msgs)
+        ]
+        report_msg = "Denúncia registrada com snapshot contextual de auditoria (5 mensagens)."
+
     report = Denuncia(
         denunciante_id=user.id,
         mensagem_id=req.mensagem_id,
         sala_id=req.sala_id,
-        motivo=req.motivo.strip()
+        motivo=req.motivo.strip(),
+        snapshot_mensagens=snapshot
     )
     db.add(report)
     db.commit()
     db.refresh(report)
-    return {"message": "Denúncia registrada com sucesso.", "id": str(report.id)}
+
+    return {"message": report_msg, "id": str(report.id), "is_ephemeral": is_ephemeral}
+
+
+# --- RF06: BLOQUEIO E DESBLOQUEIO DE USUÁRIOS ---
+
+@router.post("/users/{user_id}/block")
+def block_user(
+    user_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Bloqueia um usuário, impedindo envio de mensagens e interação (RF06)."""
+    if user.id == user_id:
+        raise HTTPException(status_code=400, detail="Não é possível bloquear a si mesmo.")
+
+    alvo = db.query(Usuario).filter(Usuario.id == user_id).first()
+    if not alvo:
+        raise HTTPException(status_code=404, detail="Usuário a ser bloqueado não encontrado.")
+
+    existente = db.query(BloqueioUsuario).filter(
+        BloqueioUsuario.usuario_id == user.id,
+        BloqueioUsuario.bloqueado_id == user_id
+    ).first()
+
+    if not existente:
+        bloqueio = BloqueioUsuario(usuario_id=user.id, bloqueado_id=user_id)
+        db.add(bloqueio)
+        db.commit()
+
+    return {"message": f"Usuário {alvo.nickname} foi bloqueado com sucesso.", "bloqueado_id": str(user_id)}
+
+
+@router.delete("/users/{user_id}/block")
+def unblock_user(
+    user_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Desbloqueia um usuário (RF06)."""
+    db.query(BloqueioUsuario).filter(
+        BloqueioUsuario.usuario_id == user.id,
+        BloqueioUsuario.bloqueado_id == user_id
+    ).delete()
+    db.commit()
+    return {"message": "Usuário desbloqueado com sucesso."}
+
+
+@router.get("/users/blocked", response_model=List[BlockedUserOut])
+def list_blocked_users(
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Lista todos os usuários bloqueados pelo usuário atual (RF06)."""
+    bloqueios = db.query(BloqueioUsuario).filter(BloqueioUsuario.usuario_id == user.id).all()
+    results = []
+    for b in bloqueios:
+        alvo = db.query(Usuario).filter(Usuario.id == b.bloqueado_id).first()
+        results.append(BlockedUserOut(
+            id=b.id,
+            bloqueado_id=b.bloqueado_id,
+            nickname=alvo.nickname if alvo else "Usuário Removido",
+            created_at=b.created_at
+        ))
+    return results
+
+
+# --- RF05 & RF04: CONFIRMAÇÃO DE LEITURA E TEMPORIZADOR TTL ---
+
+@router.post("/messages/{message_id}/read")
+async def mark_message_as_read(
+    message_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Marca a mensagem como lida (RF05).
+    Se a mensagem possuir TTL, o status 'Lido' serve como gatilho imediato
+    para o início da contagem regressiva de autodestruição (RF04).
+    """
+    msg = db.query(Mensagem).filter(Mensagem.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+
+    # Registra o recibo 'read'
+    recibo = db.query(ReciboMensagem).filter(
+        ReciboMensagem.mensagem_id == message_id,
+        ReciboMensagem.usuario_id == user.id,
+        ReciboMensagem.status == "read"
+    ).first()
+
+    if not recibo:
+        recibo = ReciboMensagem(
+            mensagem_id=message_id,
+            usuario_id=user.id,
+            status="read"
+        )
+        db.add(recibo)
+
+    # Gatilho de Autodestruição (RF04): leitura inicia a contagem do TTL
+    ttl_triggered = False
+    if msg.ttl_seconds and not msg.expires_at and msg.autor_id != user.id:
+        msg.expires_at = datetime.now(timezone.utc) + timedelta(seconds=msg.ttl_seconds)
+        ttl_triggered = True
+
+    db.commit()
+
+    # Transmite evento SSE de confirmação de leitura (ticks esmeralda ✓✓)
+    event_data = {
+        "type": "message_read",
+        "message_id": str(msg.id),
+        "reader_id": str(user.id),
+        "reader_nickname": user.nickname,
+        "sala_id": str(msg.sala_id)
+    }
+    await manager.broadcast_to_room(str(msg.sala_id), event_data)
+
+    if ttl_triggered:
+        await manager.broadcast_to_room(str(msg.sala_id), {
+            "type": "ttl_started",
+            "message_id": str(msg.id),
+            "sala_id": str(msg.sala_id),
+            "ttl_seconds": msg.ttl_seconds,
+            "expires_at": msg.expires_at.isoformat()
+        })
+
+    return {
+        "status": "read",
+        "message_id": str(msg.id),
+        "ttl_triggered": ttl_triggered,
+        "expires_at": msg.expires_at.isoformat() if msg.expires_at else None
+    }
+
+
+@router.post("/messages/{message_id}/delivered")
+async def mark_message_as_delivered(
+    message_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Marca mensagem como entregue ao cliente (RF05 - Ticks ✓✓ cinza)."""
+    msg = db.query(Mensagem).filter(Mensagem.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+
+    recibo = db.query(ReciboMensagem).filter(
+        ReciboMensagem.mensagem_id == message_id,
+        ReciboMensagem.usuario_id == user.id,
+        ReciboMensagem.status == "delivered"
+    ).first()
+
+    if not recibo:
+        recibo = ReciboMensagem(
+            mensagem_id=message_id,
+            usuario_id=user.id,
+            status="delivered"
+        )
+        db.add(recibo)
+        db.commit()
+
+    await manager.broadcast_to_room(str(msg.sala_id), {
+        "type": "message_delivered",
+        "message_id": str(msg.id),
+        "recipient_id": str(user.id),
+        "sala_id": str(msg.sala_id)
+    })
+
+    return {"status": "delivered", "message_id": str(msg.id)}
+
+
+# --- RF07: MÍDIA DE VISUALIZAÇÃO ÚNICA (VIEW-ONCE) ---
+
+@router.post("/messages/{message_id}/view-once/open")
+def open_view_once_media(
+    message_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Abre mídia de visualização única (rejeita se já tiver sido aberta anteriormente) (RF07)."""
+    msg = db.query(Mensagem).filter(Mensagem.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+
+    if not msg.is_view_once:
+        raise HTTPException(status_code=400, detail="Esta mensagem não é de visualização única.")
+
+    if msg.view_opened_at is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="Esta mídia era de visualização única e já foi visualizada/destruída."
+        )
+
+    # Marca abertura da mídia
+    msg.view_opened_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {
+        "message_id": str(msg.id),
+        "conteudo": msg.conteudo,
+        "can_view": True,
+        "is_view_once": True
+    }
+
+
+@router.post("/messages/{message_id}/view-once/close")
+async def close_and_destroy_view_once(
+    message_id: UUID,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Ao fechar o visualizador, a mídia é imediatamente excluída no Cloudflare R2
+    e a linha é purgada do banco de dados (Retenção Zero / RF07 / RN03).
+    """
+    msg = db.query(Mensagem).filter(Mensagem.id == message_id).first()
+    if not msg:
+        return {"message": "Mídia já excluída."}
+
+    if not msg.is_view_once:
+        raise HTTPException(status_code=400, detail="Esta mensagem não é de visualização única.")
+
+    sala_id = str(msg.sala_id)
+    msg_id = str(msg.id)
+
+    # Exclui fisicamente a imagem do Cloudflare R2
+    cleanup_message_media(msg.conteudo)
+
+    # Exclui registro do banco
+    db.delete(msg)
+    db.commit()
+
+    # Emite evento de destruição em tempo real para todos os clientes
+    await manager.broadcast_to_room(sala_id, {
+        "type": "message_destroyed",
+        "message_id": msg_id,
+        "sala_id": sala_id
+    })
+
+    return {"message": "Mídia de visualização única destruída com retenção zero."}

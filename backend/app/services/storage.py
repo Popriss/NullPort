@@ -85,3 +85,38 @@ async def upload_image_to_r2(file_bytes: bytes, filename: str, content_type: str
 
     public_base = settings.R2_PUBLIC_URL.rstrip("/")
     return f"{public_base}/{unique_filename}"
+
+
+def extract_r2_key(url_or_key: str) -> str:
+    """Extrai a chave do arquivo no R2 a partir de uma URL pública ou chave."""
+    if not url_or_key:
+        return ""
+    if "/" in url_or_key:
+        return url_or_key.rstrip("/").split("/")[-1]
+    return url_or_key
+
+
+def delete_file_from_r2(url_or_key: str) -> bool:
+    """
+    Exclusão definitiva de objeto no Cloudflare R2 (RN03 - Retenção Zero / Hard Wipe).
+    Garante que mídias de mensagens efêmeras, deletadas ou de visualização única
+    sejam fisicamente destruídas do bucket.
+    """
+    key = extract_r2_key(url_or_key)
+    if not key:
+        return False
+
+    s3_client = get_s3_client()
+    if not s3_client:
+        return False
+
+    try:
+        s3_client.delete_object(
+            Bucket=settings.R2_BUCKET_NAME,
+            Key=key
+        )
+        return True
+    except Exception as e:
+        print(f"[R2 HARD WIPE WARNING] Falha ao excluir objeto '{key}' do R2: {e}")
+        return False
+

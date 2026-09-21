@@ -1,5 +1,6 @@
 import bcrypt
 import jwt
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 from app.core.config import settings
@@ -27,6 +28,8 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
+    # Atribui JTI único para rastreio e revogação de sessão (RF01)
+    to_encode.setdefault("jti", uuid.uuid4().hex)
     to_encode.update({
         "exp": expire,
         "iat": now

@@ -9,6 +9,7 @@ class RoomCreate(BaseModel):
     senha: Optional[str] = None
     parent_id: Optional[UUID] = None
     tipo_sala: Optional[str] = "temporaria"  # 'permanente' ou 'temporaria'
+    is_secret_mode: Optional[bool] = False  # RF03: Modo Secreto
     ttl_minutes: Optional[int] = 1440         # Tempo de vida para salas temporárias
     max_membros: Optional[int] = 50
 
@@ -26,6 +27,7 @@ class RoomOut(BaseModel):
     parent_id: Optional[UUID] = None
     tipo_sala: str
     is_permanente: bool
+    is_secret_mode: bool = False
     expires_at: Optional[datetime] = None
     max_membros: int
     created_by: Optional[UUID] = None

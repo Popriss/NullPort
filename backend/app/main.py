@@ -17,8 +17,8 @@ from app.services.purge import run_purge_worker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Inicia a rotina de purga em segundo plano para salas temporárias
-    purge_task = asyncio.create_task(run_purge_worker(interval_seconds=60))
+    # Inicia a rotina de purga em segundo plano para salas e mensagens com TTL (Hard Wipe)
+    purge_task = asyncio.create_task(run_purge_worker(interval_seconds=15))
     yield
     purge_task.cancel()
 

@@ -22,6 +22,7 @@ export default function RoomTreeSidebar({
   const [formTitulo, setFormTitulo] = useState('');
   const [formSenha, setFormSenha] = useState('');
   const [formTipo, setFormTipo] = useState('temporaria');
+  const [formIsSecretMode, setFormIsSecretMode] = useState(false); // RF03: Modo Secreto
   const [formTtl, setFormTtl] = useState(1440); // 24h em minutos
 
   // Estados para entrar em sala existente por URL/Senha
@@ -51,6 +52,7 @@ export default function RoomTreeSidebar({
     setJoinNomeUrl('');
     setJoinSenha('');
     setFormTipo(user?.is_site_admin ? 'permanente' : 'temporaria');
+    setFormIsSecretMode(false);
     setError('');
     setShowCreateModal(true);
   };
@@ -73,6 +75,7 @@ export default function RoomTreeSidebar({
           titulo: formTitulo.trim(),
           senha: formSenha || null,
           tipo_sala: formTipo,
+          is_secret_mode: formIsSecretMode,
           ttl_minutes: formTipo === 'temporaria' ? parseInt(formTtl) : null
         });
       }
@@ -488,6 +491,22 @@ export default function RoomTreeSidebar({
                     )}
                   </>
                 )}
+
+                <div className="flex items-center gap-2.5 p-3 rounded-xl bg-purple-950/20 border border-purple-500/30">
+                  <input
+                    type="checkbox"
+                    id="secretModeToggle"
+                    checked={formIsSecretMode}
+                    onChange={(e) => setFormIsSecretMode(e.target.checked)}
+                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-zinc-900 border-zinc-700 cursor-pointer"
+                  />
+                  <label htmlFor="secretModeToggle" className="text-xs text-purple-200 cursor-pointer select-none">
+                    <span className="font-bold flex items-center gap-1">🔒 Modo Secreto (RF03)</span>
+                    <span className="text-[11px] text-zinc-400 block mt-0.5">
+                      Retenção zero de histórico e desativação total de exportação de mensagens.
+                    </span>
+                  </label>
+                </div>
 
                 <div className="flex justify-end gap-2 pt-2">
                   <button

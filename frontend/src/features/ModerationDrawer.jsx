@@ -4,7 +4,8 @@ import {
   generateWebhook,
   deleteWebhook,
   fetchAuditLogs,
-  exportRoomHistory
+  exportRoomHistory,
+  blockUser
 } from '../services/chat';
 
 export default function ModerationDrawer({
@@ -255,6 +256,25 @@ export default function ModerationDrawer({
                 className="p-1.5 px-2 rounded-lg text-[11px] font-medium bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-all cursor-pointer"
               >
                 Banir
+              </button>
+            )}
+
+            {!isSelf && (
+              <button
+                onClick={async () => {
+                  if (confirm(`Deseja bloquear ${member.nickname || 'este usuário'}?`)) {
+                    try {
+                      await blockUser(memberUserId);
+                      alert(`Usuário ${member.nickname || ''} bloqueado com sucesso.`);
+                    } catch (e) {
+                      alert(e.message || "Erro ao bloquear");
+                    }
+                  }
+                }}
+                title="Bloquear usuário (RF06)"
+                className="p-1.5 px-2 rounded-lg text-[11px] font-medium bg-zinc-800 text-zinc-400 hover:bg-rose-500/20 hover:text-rose-300 transition-all cursor-pointer"
+              >
+                🚫
               </button>
             )}
           </div>
