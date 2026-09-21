@@ -103,3 +103,36 @@ class Denuncia(Base):
     denunciante = relationship("Usuario", back_populates="denuncias", foreign_keys=[denunciante_id])
     mensagem = relationship("Mensagem", foreign_keys=[mensagem_id])
     sala = relationship("Sala", back_populates="denuncias", foreign_keys=[sala_id])
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sala_id = Column(UUID(as_uuid=True), ForeignKey("salas.id", ondelete="SET NULL"), nullable=True)
+    usuario_id = Column(UUID(as_uuid=True), ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True)
+    actor_nickname = Column(String(50), nullable=True)
+    action = Column(String(50), nullable=False)  # 'role_change', 'mute_member', 'unmute_member', 'ban_member', 'create_room', 'delete_room', 'create_subroom'
+    target_id = Column(String(100), nullable=True)
+    target_nickname = Column(String(50), nullable=True)
+    detalhes = Column(JSONB, server_default='{}', nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
+
+    # Relacionamentos
+    sala = relationship("Sala", foreign_keys=[sala_id])
+    usuario = relationship("Usuario", foreign_keys=[usuario_id])
+
+
+class RoomWebhook(Base):
+    __tablename__ = "room_webhooks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sala_id = Column(UUID(as_uuid=True), ForeignKey("salas.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String(100), default="Webhook Externo", nullable=False)
+    token = Column(String(128), unique=True, index=True, nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now())
+
+    # Relacionamentos
+    sala = relationship("Sala", foreign_keys=[sala_id])
+    criador = relationship("Usuario", foreign_keys=[created_by])

@@ -1,26 +1,43 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Request, status, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any, Tuple
 import json
 import asyncio
 import os
+import re
 import requests
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia
+from app.models.models import Sala, Mensagem, MembroSala, Usuario, Denuncia, AuditLog
 from app.schemas.chat import MessageCreate, MessageOut
 from app.schemas.rooms import RoomCreate, RoomOut, MemberOut, MemberMuteUpdate, MemberRoleUpdate, RoomJoinRequest, RoomJoinByUrlRequest
 from app.services.auth import decode_access_token, get_password_hash, verify_password
 from app.services.sse import manager
 from app.services.storage import validate_and_sanitize_image, upload_image_to_r2
+from app.services.export import export_room_history_encrypted
 from app.core.security import rate_limiter
 from app.core.rbac import get_current_user, require_chat_role, ROLE_WEIGHTS
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+def extract_mentions(content: str) -> List[str]:
+    """Extrai todos os nicknames mencionados no padrão @nickname."""
+    if not content:
+        return []
+    matches = re.findall(r"@([a-zA-Z0-9_.-]+)", content)
+    seen = set()
+    result = []
+    for nick in matches:
+        clean_nick = nick.strip()
+        if clean_nick and clean_nick.lower() not in seen:
+            seen.add(clean_nick.lower())
+            result.append(clean_nick)
+    return result
+
 
 class ReactionCreate(BaseModel):
     emoji: str
@@ -180,10 +197,65 @@ def create_room(
     # Criador se torna admin do chat
     ensure_room_membership(db, room.id, user.id, role="admin")
 
+    # Registra ação na trilha de auditoria
+    db.add(AuditLog(
+        sala_id=room.id,
+        usuario_id=user.id,
+        actor_nickname=user.nickname,
+        action="create_room",
+        target_id=str(room.id),
+        target_nickname=room.titulo or room.nome_url,
+        detalhes={
+            "tipo_sala": tipo,
+            "is_permanente": is_perm,
+            "nome_url": room.nome_url
+        }
+    ))
+    db.commit()
+
     room_out = RoomOut.model_validate(room)
     room_out.is_membro = True
     room_out.tem_senha = bool(room.hash_senha)
     return room_out
+
+
+@router.delete("/rooms/{room_id}")
+def delete_room(
+    room_id: UUID,
+    auth_data: Tuple = Depends(require_chat_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Exclui sala, sub-canal ou sala temporária (restrito a Admin do Chat ou Site Admin)."""
+    user, _ = auth_data
+    room = db.query(Sala).filter(Sala.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Sala não encontrada.")
+
+    action_type = "delete_subroom" if room.parent_id else "delete_room"
+    room_title = room.titulo or room.nome_url
+
+    # Grava na trilha de auditoria imutável antes da deleção
+    audit_log = AuditLog(
+        sala_id=room.id,
+        usuario_id=user.id,
+        actor_nickname=user.nickname,
+        action=action_type,
+        target_id=str(room.id),
+        target_nickname=room_title,
+        detalhes={
+            "nome_url": room.nome_url,
+            "tipo_sala": room.tipo_sala,
+            "parent_id": str(room.parent_id) if room.parent_id else None
+        }
+    )
+    db.add(audit_log)
+    db.commit()
+
+    db.delete(room)
+    db.commit()
+
+    return {"message": f"Sala '{room_title}' excluída com sucesso."}
+
 
 
 @router.post("/rooms/join-by-url", response_model=RoomOut)
@@ -326,7 +398,23 @@ def create_subroom(
     # O criador é admin da sub-sala
     ensure_room_membership(db, subroom.id, user.id, role="admin")
 
+    # Registra ação na trilha de auditoria
+    db.add(AuditLog(
+        sala_id=subroom.id,
+        usuario_id=user.id,
+        actor_nickname=user.nickname,
+        action="create_subroom",
+        target_id=str(subroom.id),
+        target_nickname=subroom.titulo or subroom.nome_url,
+        detalhes={
+            "parent_id": str(room_id),
+            "nome_url": subroom.nome_url
+        }
+    ))
+    db.commit()
+
     subroom_out = RoomOut.model_validate(subroom)
+
     subroom_out.is_membro = True
     subroom_out.tem_senha = bool(subroom.hash_senha)
     return subroom_out
@@ -406,10 +494,22 @@ async def mute_chat_member(
         raise HTTPException(status_code=404, detail="Membro não encontrado nesta sala.")
 
     membro.is_muted = req.is_muted
+
+    actor_user, _ = auth_data
+    target_user = db.query(Usuario).filter(Usuario.id == user_id).first()
+    db.add(AuditLog(
+        sala_id=room_id,
+        usuario_id=actor_user.id,
+        actor_nickname=actor_user.nickname,
+        action="mute_member" if req.is_muted else "unmute_member",
+        target_id=str(user_id),
+        target_nickname=target_user.nickname if target_user else None,
+        detalhes={"is_muted": req.is_muted}
+    ))
     db.commit()
     db.refresh(membro)
 
-    user_info = db.query(Usuario).filter(Usuario.id == user_id).first()
+    user_info = target_user or db.query(Usuario).filter(Usuario.id == user_id).first()
     online_user_ids = manager.get_online_user_ids(str(room_id))
     is_online = (str(user_id) in online_user_ids) or (user_id in online_user_ids)
 
@@ -453,11 +553,27 @@ async def update_chat_member_role(
     if not membro:
         raise HTTPException(status_code=404, detail="Membro não encontrado nesta sala.")
 
+    old_role = membro.role
     membro.role = req.role
+
+    actor_user, _ = auth_data
+    target_user = db.query(Usuario).filter(Usuario.id == user_id).first()
+    db.add(AuditLog(
+        sala_id=room_id,
+        usuario_id=actor_user.id,
+        actor_nickname=actor_user.nickname,
+        action="role_change",
+        target_id=str(user_id),
+        target_nickname=target_user.nickname if target_user else None,
+        detalhes={
+            "old_role": old_role,
+            "new_role": req.role
+        }
+    ))
     db.commit()
     db.refresh(membro)
 
-    user_info = db.query(Usuario).filter(Usuario.id == user_id).first()
+    user_info = target_user or db.query(Usuario).filter(Usuario.id == user_id).first()
     online_user_ids = manager.get_online_user_ids(str(room_id))
     is_online = (str(user_id) in online_user_ids) or (user_id in online_user_ids)
 
@@ -496,6 +612,18 @@ async def ban_chat_member(
     if not membro:
         raise HTTPException(status_code=404, detail="Membro não encontrado nesta sala.")
 
+    actor_user, _ = auth_data
+    target_user = db.query(Usuario).filter(Usuario.id == user_id).first()
+    db.add(AuditLog(
+        sala_id=room_id,
+        usuario_id=actor_user.id,
+        actor_nickname=actor_user.nickname,
+        action="ban_member",
+        target_id=str(user_id),
+        target_nickname=target_user.nickname if target_user else None,
+        detalhes={"action": "ban"}
+    ))
+
     db.delete(membro)
     db.commit()
 
@@ -505,6 +633,70 @@ async def ban_chat_member(
     })
 
     return {"message": "Membro banido/removido da sala com sucesso."}
+
+
+# --- RECURSOS V3: DIGITAÇÃO & EXPORTAÇÃO CRIPTOGRAFADA ---
+
+class TypingEventRequest(BaseModel):
+    is_typing: bool = True
+
+@router.post("/rooms/{room_id}/typing")
+async def broadcast_typing_indicator(
+    room_id: UUID,
+    req: Optional[TypingEventRequest] = None,
+    user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Transmite evento efêmero SSE 'typing' sem qualquer gravação no banco de dados.
+    """
+    is_typing = req.is_typing if req is not None else True
+
+    await manager.broadcast_to_room(str(room_id), {
+        "type": "typing",
+        "room_id": str(room_id),
+        "user_id": str(user.id),
+        "nickname": user.nickname,
+        "is_typing": is_typing,
+        "expires_in": 3
+    })
+
+    return {
+        "status": "ok",
+        "is_typing": is_typing,
+        "nickname": user.nickname
+    }
+
+
+class ExportHistoryRequest(BaseModel):
+    password: str
+    format: Optional[str] = "json"
+
+
+@router.post("/rooms/{room_id}/export")
+def export_room_history_endpoint(
+    room_id: UUID,
+    req: ExportHistoryRequest,
+    auth_data: Tuple = Depends(require_chat_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Exporta o histórico da sala protegido e criptografado por senha (restrito a Admin)."""
+    try:
+        content_bytes, filename, media_type = export_room_history_encrypted(
+            db=db,
+            room_id=room_id,
+            password=req.password,
+            export_format=req.format or "json"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return Response(
+        content=content_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 
 
 # --- MENSAGENS & SSE ---

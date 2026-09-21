@@ -10,7 +10,8 @@ import {
   muteMember,
   banMember,
   fetchRoomMembers,
-  updateMemberRole
+  updateMemberRole,
+  sendTyping
 } from '../services/chat';
 import { compressImage } from '../utils/compression';
 import { isImageUrl } from '../utils/regex';
@@ -21,6 +22,54 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 
 const EMOJIS_DISPONIVEIS = ['👍', '❤️', '😂', '🔥', '🚀'];
+
+// Helper para detecção e destaque visual de menções @nickname (chip verde esmeralda)
+const renderWithMentions = (child) => {
+  if (typeof child === 'string') {
+    const parts = child.split(/(@[a-zA-Z0-9_.-]+)/g);
+    if (parts.length === 1) return child;
+    return parts.map((part, i) => {
+      if (part.startsWith('@')) {
+        return (
+          <span
+            key={i}
+            className="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono shadow-xs"
+          >
+            {part}
+          </span>
+        );
+      }
+      return part;
+    });
+  }
+  if (Array.isArray(child)) {
+    return child.map((c, i) => <React.Fragment key={i}>{renderWithMentions(c)}</React.Fragment>);
+  }
+  return child;
+};
+
+// Sintetizador de áudio discreto para menção via Web Audio API
+const playMentionChime = () => {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.36);
+  } catch (e) {
+    console.debug("Audio mention chime skipped:", e);
+  }
+};
+
 
 export default function ChatBox({
   user,
@@ -52,13 +101,48 @@ export default function ChatBox({
   const [showScrollBottomButton, setShowScrollBottomButton] = useState(false);
   const [unreadBelowCount, setUnreadBelowCount] = useState(0);
 
+  // Estados V3 para Indicador de Digitação (Typing Indicator)
+  const [typingUsers, setTypingUsers] = useState({}); // { [nickname]: timestamp }
+  const typingTimeoutRef = useRef(null);
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const isInitialLoadRef = useRef(true);
   const scrollRafRef = useRef(null);
 
+  // Expiração automática de 3 segundos do indicador 'digitando...'
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setTypingUsers((prev) => {
+        let changed = false;
+        const updated = {};
+        for (const [nick, timestamp] of Object.entries(prev)) {
+          if (now - timestamp < 3000) {
+            updated[nick] = timestamp;
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? updated : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Registro do Service Worker para Web Push API nativa em background
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.debug('Service Worker não registrado:', err);
+      });
+    }
+  }, []);
+
   // Helper de Notificações Toast Modernas
+
   const showToast = (message, type = 'info') => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, type }]);
@@ -277,6 +361,25 @@ export default function ChatBox({
         return;
       }
 
+      // Indicador Efêmero de Digitação (Typing Indicator)
+      if (eventData.type === "typing") {
+        if (eventData.nickname && eventData.nickname !== user?.nickname) {
+          if (eventData.is_typing) {
+            setTypingUsers((prev) => ({
+              ...prev,
+              [eventData.nickname]: Date.now()
+            }));
+          } else {
+            setTypingUsers((prev) => {
+              const copy = { ...prev };
+              delete copy[eventData.nickname];
+              return copy;
+            });
+          }
+        }
+        return;
+      }
+
       // Mensagem nova
       const newMessage = eventData;
       setMessages((prev) => {
@@ -284,11 +387,21 @@ export default function ChatBox({
         return [...prev, newMessage];
       });
 
+      // Se o usuário logado foi mencionado com @nickname, toca sinal sonoro suave e emite toast
+      if (user?.nickname && newMessage.autor_nickname !== user.nickname && newMessage.conteudo) {
+        const mentionRegex = new RegExp(`@${user.nickname}\\b`, 'i');
+        if (mentionRegex.test(newMessage.conteudo)) {
+          playMentionChime();
+          showToast(`Você foi mencionado por @${newMessage.autor_nickname}!`, 'info');
+        }
+      }
+
       if (showScrollBottomButton) {
         setUnreadBelowCount((prev) => prev + 1);
       }
 
       notifyNewMessage(newMessage);
+
     }, roomId, (status) => {
       setSseStatus(status);
     });
@@ -321,10 +434,31 @@ export default function ChatBox({
     setUnreadBelowCount(0);
   }, [roomId]);
 
+  // Disparo com debounce (300ms) de digitação no servidor
+  const handleInputChange = (e) => {
+    setInput(e.target.value);
+
+    if (roomId && user?.nickname && userRole !== 'view' && !isUserMuted) {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      typingTimeoutRef.current = setTimeout(() => {
+        sendTyping(roomId, true);
+      }, 300);
+    }
+  };
+
   // Envio de mensagem
   const handleSend = async (e) => {
     e.preventDefault();
     if (!input.trim() || sending || isUserMuted || userRole === 'view') return;
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    if (roomId) {
+      sendTyping(roomId, false);
+    }
 
     const textToSend = input.trim();
     const replyId = replyingTo ? replyingTo.id : null;
@@ -334,6 +468,7 @@ export default function ChatBox({
 
     try {
       setSending(true);
+
       if (activeRoom?.id) {
         await sendRoomMessage(activeRoom.id, textToSend, replyId);
       } else {
@@ -721,7 +856,16 @@ export default function ChatBox({
                                 onClick={() => setImagemAmpliada(props.src)}
                               />
                             ),
-                            p: ({ node, ...props }) => <p className="mb-1 last:mb-0" {...props} />,
+                            p: ({ node, children, ...props }) => (
+                              <p className="mb-1 last:mb-0 leading-relaxed" {...props}>
+                                {renderWithMentions(children)}
+                              </p>
+                            ),
+                            li: ({ node, children, ...props }) => (
+                              <li {...props}>
+                                {renderWithMentions(children)}
+                              </li>
+                            ),
                             a: ({ node, ...props }) => (
                               <a
                                 className="text-emerald-300 hover:underline font-medium"
@@ -734,6 +878,7 @@ export default function ChatBox({
                         >
                           {msg.conteudo}
                         </ReactMarkdown>
+
                       </div>
                     )}
 
@@ -919,6 +1064,22 @@ export default function ChatBox({
           </div>
         )}
 
+        {/* Indicador Visual Efêmero de Usuários Digitando (Typing Indicator) */}
+        {Object.keys(typingUsers).length > 0 && (
+          <div className="flex items-center gap-2 px-4 py-1.5 text-xs text-emerald-400 font-medium bg-zinc-950/95 border-b border-zinc-800/80 animate-fade-in">
+            <span className="flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" />
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.2s]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.4s]" />
+            </span>
+            <span>
+              {Object.keys(typingUsers).length === 1
+                ? `${Object.keys(typingUsers)[0]} está digitando...`
+                : `${Object.keys(typingUsers).join(', ')} estão digitando...`}
+            </span>
+          </div>
+        )}
+
         <form onSubmit={handleSend} className="p-3.5 flex items-center gap-3">
           <input
             type="file"
@@ -940,8 +1101,9 @@ export default function ChatBox({
 
           <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+
             disabled={isInputDisabled}
             placeholder={
               isUserMuted

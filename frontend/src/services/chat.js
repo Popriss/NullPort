@@ -307,3 +307,99 @@ export async function reportMessage(messageId, roomId, motivo) {
   if (!response.ok) throw new Error("Erro ao registrar denúncia");
   return response.json();
 }
+
+// --- Recursos V3 (Digitação, Webhooks, Auditoria e Exportação Criptografada) ---
+
+export async function sendTyping(roomId, isTyping = true) {
+  const token = getToken();
+  if (!roomId || !token) return;
+  try {
+    await fetch(`${API_URL}/api/chat/rooms/${roomId}/typing`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ is_typing: isTyping })
+    });
+  } catch (err) {
+    // Evento efêmero: falhas silenciosas são aceitáveis
+    console.debug("Erro ao enviar indicador de digitação:", err);
+  }
+}
+
+export async function fetchWebhooks(roomId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/webhooks`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao carregar webhooks da sala");
+  }
+  return response.json();
+}
+
+export async function generateWebhook(roomId, nome = "Webhook Externo") {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/webhooks`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ nome })
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao gerar webhook para a sala");
+  }
+  return response.json();
+}
+
+export async function deleteWebhook(roomId, webhookId) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/webhooks/${webhookId}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao remover webhook");
+  }
+  return response.json();
+}
+
+export async function fetchAuditLogs(salaId = null, action = null, limit = 100) {
+  const token = getToken();
+  const params = new URLSearchParams();
+  if (salaId) params.append('sala_id', salaId);
+  if (action) params.append('action', action);
+  if (limit) params.append('limit', limit);
+
+  const response = await fetch(`${API_URL}/api/admin/audit-logs?${params.toString()}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao carregar trilha de auditoria");
+  }
+  return response.json();
+}
+
+export async function exportRoomHistory(roomId, format = 'json', password) {
+  const token = getToken();
+  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/export`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ format, password })
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Erro ao exportar histórico criptografado");
+  }
+  return response.blob();
+}

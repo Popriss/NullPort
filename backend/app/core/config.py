@@ -26,7 +26,17 @@ class Settings(BaseSettings):
     R2_BUCKET_NAME: str = os.getenv("R2_BUCKET_NAME", "nullport-images")
     R2_PUBLIC_URL: str = os.getenv("R2_PUBLIC_URL", "")
 
+    # Redis & Upstash Pub/Sub (V3 Infra)
+    REDIS_URL: str = os.getenv("REDIS_URL", os.getenv("UPSTASH_REDIS_URL", "")).strip().strip('"\'')
+    UPSTASH_REDIS_URL: str = os.getenv("UPSTASH_REDIS_URL", "").strip().strip('"\'')
+
+    # Web Push API (VAPID)
+    VAPID_PUBLIC_KEY: str = os.getenv("VAPID_PUBLIC_KEY", "")
+    VAPID_PRIVATE_KEY: str = os.getenv("VAPID_PRIVATE_KEY", "")
+    VAPID_CLAIMS_SUB: str = os.getenv("VAPID_CLAIMS_SUB", "mailto:admin@nullport.com")
+
     class Config:
         case_sensitive = True
 
 settings = Settings()
+

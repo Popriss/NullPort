@@ -1,3 +1,3 @@
-from .models import Usuario, Sala, MembroSala, Mensagem, Denuncia
+from .models import Usuario, Sala, MembroSala, Mensagem, Denuncia, AuditLog, RoomWebhook
 
-__all__ = ["Usuario", "Sala", "MembroSala", "Mensagem", "Denuncia"]
+__all__ = ["Usuario", "Sala", "MembroSala", "Mensagem", "Denuncia", "AuditLog", "RoomWebhook"]

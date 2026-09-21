@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import UUID
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.core.rbac import require_site_admin
-from app.models.models import Usuario, Sala, Denuncia, MembroSala
+from app.core.rbac import require_site_admin, get_current_user
+from app.models.models import Usuario, Sala, Denuncia, MembroSala, AuditLog
 from app.schemas.auth import UserOut
 from app.schemas.rooms import RoomCreate, RoomOut
 from app.services.auth import get_password_hash
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -124,3 +125,71 @@ def list_reports(
         }
         for r in reports
     ]
+
+
+class AuditLogOut(BaseModel):
+    id: UUID
+    sala_id: Optional[UUID] = None
+    usuario_id: Optional[UUID] = None
+    actor_nickname: Optional[str] = None
+    action: str
+    target_id: Optional[str] = None
+    target_nickname: Optional[str] = None
+    detalhes: Dict[str, Any] = {}
+    created_at: str
+
+
+@router.get("/audit-logs", response_model=List[AuditLogOut])
+def list_audit_logs(
+    sala_id: Optional[UUID] = None,
+    action: Optional[str] = None,
+    limit: int = Query(default=100, le=500),
+    db: Session = Depends(get_db),
+    user: Usuario = Depends(get_current_user)
+):
+    """
+    Exibe a trilha de auditoria imutável (Audit Trail).
+    Acesso permitido para Site Admins (global) ou Admins da respectiva sala.
+    """
+    # Validação de permissão: Site Admin ou Admin da sala especificada
+    if not user.is_site_admin:
+        if not sala_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas Administradores do Site podem consultar logs globais sem especificar sala_id."
+            )
+        # Verifica se é admin da sala
+        membro = db.query(MembroSala).filter(
+            MembroSala.sala_id == sala_id,
+            MembroSala.usuario_id == user.id,
+            MembroSala.role == "admin"
+        ).first()
+        if not membro:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Acesso negado: Requer privilégios de Admin para auditar esta sala."
+            )
+
+    query = db.query(AuditLog)
+    if sala_id:
+        query = query.filter(AuditLog.sala_id == sala_id)
+    if action:
+        query = query.filter(AuditLog.action == action)
+
+    logs = query.order_by(AuditLog.created_at.desc()).limit(limit).all()
+
+    return [
+        AuditLogOut(
+            id=log.id,
+            sala_id=log.sala_id,
+            usuario_id=log.usuario_id,
+            actor_nickname=log.actor_nickname,
+            action=log.action,
+            target_id=log.target_id,
+            target_nickname=log.target_nickname,
+            detalhes=log.detalhes or {},
+            created_at=log.created_at.isoformat()
+        )
+        for log in logs
+    ]
+
