@@ -3,13 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.core.config import settings
 from app.core.database import Base, engine
+from app.core.migrations import run_auto_migrations
 
-# Cria as tabelas se não existirem (caso utilize conexão direta com Supabase)
+# Sincroniza schema e executa migrações automáticas (garante criação de novas colunas no Supabase/Render)
 if engine:
     try:
+        run_auto_migrations(engine)
         Base.metadata.create_all(bind=engine)
     except Exception as e:
-        print(f"Aviso ao inicializar tabelas: {e}")
+        print(f"Aviso ao inicializar tabelas e migrações: {e}")
 
 import asyncio
 from contextlib import asynccontextmanager
