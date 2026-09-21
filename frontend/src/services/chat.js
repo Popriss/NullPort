@@ -165,9 +165,13 @@ export async function banMember(roomId, userId) {
 
 // --- Mensagens por Sala ---
 
-export async function fetchRoomMessages(roomId) {
+export async function fetchRoomMessages(roomId, limit = 100, before = null) {
   const token = getToken();
-  const response = await fetch(`${API_URL}/api/chat/rooms/${roomId}/messages`, {
+  let url = `${API_URL}/api/chat/rooms/${roomId}/messages?limit=${limit}`;
+  if (before) {
+    url += `&before=${encodeURIComponent(before)}`;
+  }
+  const response = await fetch(url, {
     headers: { 'Authorization': `Bearer ${token}` }
   });
   if (!response.ok) {
@@ -205,9 +209,13 @@ export async function sendRoomMessage(roomId, conteudo, replyToId = null, extra 
 
 // --- Compatibilidade Legada ---
 
-export async function fetchMessages() {
+export async function fetchMessages(limit = 100, before = null) {
   const token = getToken();
-  const response = await fetch(`${API_URL}/api/chat/messages`, {
+  let url = `${API_URL}/api/chat/messages?limit=${limit}`;
+  if (before) {
+    url += `&before=${encodeURIComponent(before)}`;
+  }
+  const response = await fetch(url, {
     headers: { 'Authorization': `Bearer ${token}` }
   });
   if (!response.ok) throw new Error("Erro ao buscar mensagens");

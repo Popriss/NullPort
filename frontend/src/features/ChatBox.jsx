@@ -118,6 +118,11 @@ export default function ChatBox({
   const [activeViewOnceId, setActiveViewOnceId] = useState(null); // RF07: Modal de visualização
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false); // RF01/RN06: Central de segurança
 
+  // Estados de Paginação e Histórico Progressivo (Scroll Infinito para cima)
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const isPrependingRef = useRef(false);
+
   // RN02: Inicialização da proteção de tela e anti-captura web
   useEffect(() => {
     const cleanup = initScreenProtection();
@@ -218,6 +223,53 @@ export default function ChatBox({
       setUnreadBelowCount(0);
     } else {
       setShowScrollBottomButton(true);
+    }
+
+    // Scroll infinito para cima: carrega mensagens anteriores ao se aproximar do topo
+    if (scrollTop < 80 && hasMore && !loadingMore) {
+      loadOlderMessages();
+    }
+  };
+
+  const loadOlderMessages = async () => {
+    if (loadingMore || !hasMore || messages.length === 0 || !roomId) return;
+    setLoadingMore(true);
+
+    const oldestMsg = messages[0];
+    const container = messagesContainerRef.current;
+    const prevScrollHeight = container ? container.scrollHeight : 0;
+    const prevScrollTop = container ? container.scrollTop : 0;
+
+    try {
+      const olderData = activeRoom?.id
+        ? await fetchRoomMessages(roomId, 100, oldestMsg.id)
+        : await fetchMessages(100, oldestMsg.id);
+
+      if (olderData && olderData.length > 0) {
+        isPrependingRef.current = true;
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const newOlder = olderData.filter((m) => !existingIds.has(m.id));
+          return [...newOlder, ...prev];
+        });
+
+        // Preserva com precisão milimétrica a posição do scroll sem saltos visuais
+        requestAnimationFrame(() => {
+          if (container) {
+            container.scrollTop = container.scrollHeight - prevScrollHeight + prevScrollTop;
+          }
+        });
+
+        if (olderData.length < 100) {
+          setHasMore(false);
+        }
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error("Erro ao carregar mensagens anteriores:", err);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -343,9 +395,10 @@ export default function ChatBox({
     const loadMessages = async () => {
       try {
         const data = activeRoom?.id
-          ? await fetchRoomMessages(roomId)
-          : await fetchMessages();
+          ? await fetchRoomMessages(roomId, 100)
+          : await fetchMessages(100);
         setMessages(data);
+        setHasMore(data.length >= 100);
       } catch (err) {
         console.error("Erro ao carregar mensagens:", err);
       }
@@ -506,6 +559,12 @@ export default function ChatBox({
   useEffect(() => {
     if (messages.length === 0) return;
 
+    // Se estivermos anexando mensagens antigas ao topo, ignora o auto-scroll para baixo
+    if (isPrependingRef.current) {
+      isPrependingRef.current = false;
+      return;
+    }
+
     if (isInitialLoadRef.current) {
       scrollToBottom(false);
       isInitialLoadRef.current = false;
@@ -523,6 +582,8 @@ export default function ChatBox({
     isInitialLoadRef.current = true;
     setShowScrollBottomButton(false);
     setUnreadBelowCount(0);
+    setHasMore(true);
+    setLoadingMore(false);
   }, [roomId]);
 
   // Disparo com debounce (300ms) de digitação no servidor
@@ -863,6 +924,21 @@ export default function ChatBox({
         onScroll={handleMessagesScroll}
         className="relative flex-1 overflow-y-auto px-4 py-3 space-y-2 custom-scrollbar will-change-scroll [transform:translateZ(0)]"
       >
+        {/* Indicador de carregamento superior / Início do Histórico */}
+        {loadingMore && (
+          <div className="flex items-center justify-center py-2 text-xs text-emerald-400 gap-2 select-none animate-pulse">
+            <div className="w-3.5 h-3.5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+            <span>Carregando mensagens anteriores...</span>
+          </div>
+        )}
+        {!hasMore && messages.length >= 100 && (
+          <div className="flex items-center justify-center py-3 text-[11px] text-zinc-500 gap-2 select-none">
+            <span className="w-8 h-px bg-zinc-800"></span>
+            <span>Início do histórico de mensagens</span>
+            <span className="w-8 h-px bg-zinc-800"></span>
+          </div>
+        )}
+
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-xs py-12">
             <span className="text-3xl mb-2">💬</span>

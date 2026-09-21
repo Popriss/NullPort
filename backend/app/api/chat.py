@@ -706,9 +706,14 @@ def get_room_messages(
     room_id: UUID,
     user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db),
-    limit: int = 500
+    limit: int = 100,
+    before: Optional[str] = None
 ):
-    """Leitura de mensagens da sala (usuários view, padrao, mod, admin)."""
+    """
+    Leitura de mensagens da sala com suporte a histórico progressivo (paginação reversa):
+    - limit: quantidade de mensagens a retornar (padrão: 100, máx: 200).
+    - before: ID (UUID) ou timestamp ISO da mensagem de corte. Retorna mensagens anteriores a ela.
+    """
     if not user.is_site_admin:
         membro = db.query(MembroSala).filter(
             MembroSala.sala_id == room_id,
@@ -717,11 +722,34 @@ def get_room_messages(
         if not membro:
             raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
 
+    query = db.query(Mensagem).filter(Mensagem.sala_id == room_id)
+
+    if before:
+        ref_created_at = None
+        try:
+            ref_uuid = UUID(str(before).strip())
+            ref_msg = db.query(Mensagem.created_at).filter(Mensagem.id == ref_uuid).first()
+            if ref_msg:
+                ref_created_at = ref_msg[0]
+        except ValueError:
+            pass
+
+        if not ref_created_at:
+            try:
+                cleaned = str(before).strip()
+                if cleaned.endswith("Z"):
+                    cleaned = cleaned[:-1] + "+00:00"
+                ref_created_at = datetime.fromisoformat(cleaned)
+            except Exception:
+                pass
+
+        if ref_created_at:
+            query = query.filter(Mensagem.created_at < ref_created_at)
+
     messages = (
-        db.query(Mensagem)
-        .filter(Mensagem.sala_id == room_id)
+        query
         .order_by(Mensagem.created_at.desc())
-        .limit(limit)
+        .limit(min(limit, 200))
         .all()
     )
     messages.reverse()
@@ -836,7 +864,8 @@ async def send_room_message(
 def get_messages_legacy(
     auth: dict = Depends(get_user_or_room_auth),
     db: Session = Depends(get_db),
-    limit: int = 500
+    limit: int = 100,
+    before: Optional[str] = None
 ):
     sala_id = auth.get("sala_id")
     if not sala_id:
@@ -861,11 +890,34 @@ def get_messages_legacy(
         if not membro:
             raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
 
+    query = db.query(Mensagem).filter(Mensagem.sala_id == sala_uuid)
+
+    if before:
+        ref_created_at = None
+        try:
+            ref_uuid = UUID(str(before).strip())
+            ref_msg = db.query(Mensagem.created_at).filter(Mensagem.id == ref_uuid).first()
+            if ref_msg:
+                ref_created_at = ref_msg[0]
+        except ValueError:
+            pass
+
+        if not ref_created_at:
+            try:
+                cleaned = str(before).strip()
+                if cleaned.endswith("Z"):
+                    cleaned = cleaned[:-1] + "+00:00"
+                ref_created_at = datetime.fromisoformat(cleaned)
+            except Exception:
+                pass
+
+        if ref_created_at:
+            query = query.filter(Mensagem.created_at < ref_created_at)
+
     messages = (
-        db.query(Mensagem)
-        .filter(Mensagem.sala_id == sala_uuid)
+        query
         .order_by(Mensagem.created_at.desc())
-        .limit(limit)
+        .limit(min(limit, 200))
         .all()
     )
     messages.reverse()
