@@ -780,7 +780,19 @@ async def send_room_message(
             MembroSala.usuario_id == user.id
         ).first()
         if not membro:
-            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
+            room_check = db.query(Sala).filter(Sala.id == room_id).first()
+            if room_check and not room_check.hash_senha:
+                membro = MembroSala(
+                    sala_id=room_id,
+                    usuario_id=user.id,
+                    role="padrao",
+                    is_muted=False
+                )
+                db.add(membro)
+                db.commit()
+                db.refresh(membro)
+            else:
+                raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
         
         if membro.is_muted:
             raise HTTPException(status_code=403, detail="Você está silenciado (mutado) nesta sala.")
@@ -788,21 +800,25 @@ async def send_room_message(
         if membro.role == "view":
             raise HTTPException(status_code=403, detail="Acesso apenas para visualização. Proibido de enviar mensagens.")
 
-    # 3. Rate limit defensivo: 1 msg/segundo por usuário
+    # 3. Rate limit defensivo
     rate_limiter.check_message_rate(str(user.id))
 
     # 4. Verifica se o usuário foi bloqueado por algum membro da sala (RF06)
-    bloqueio = db.query(BloqueioUsuario).join(
-        MembroSala, MembroSala.usuario_id == BloqueioUsuario.usuario_id
-    ).filter(
+    outros_membros = db.query(MembroSala.usuario_id).filter(
         MembroSala.sala_id == room_id,
-        BloqueioUsuario.bloqueado_id == user.id
-    ).first()
-    if bloqueio:
-        raise HTTPException(
-            status_code=403,
-            detail="Mensagem não entregue. Você foi bloqueado por um participante desta sala."
-        )
+        MembroSala.usuario_id != user.id
+    ).all()
+    outros_membros_ids = [m[0] for m in outros_membros]
+    if outros_membros_ids:
+        bloqueio = db.query(BloqueioUsuario).filter(
+            BloqueioUsuario.usuario_id.in_(outros_membros_ids),
+            BloqueioUsuario.bloqueado_id == user.id
+        ).first()
+        if bloqueio:
+            raise HTTPException(
+                status_code=403,
+                detail="Mensagem não entregue. Você foi bloqueado por um participante desta sala."
+            )
 
     # 5. Define modo secreto herdado da sala ou da mensagem (RF03)
     room = db.query(Sala).filter(Sala.id == room_id).first()
@@ -930,21 +946,31 @@ async def send_message_legacy(
     auth: dict = Depends(get_user_or_room_auth),
     db: Session = Depends(get_db)
 ):
-    sala_id = auth.get("sala_id")
     user_id = auth.get("user_id") or auth.get("sub")
     autor_nickname = auth.get("nickname", "Anônimo")
-
-    if not sala_id:
-        raise HTTPException(status_code=400, detail="sala_id ausente.")
+    sala_id = auth.get("sala_id") or (str(msg_in.sala_id) if msg_in.sala_id else None)
 
     if not user_id:
         raise HTTPException(status_code=401, detail="Identificador de usuário ausente no token.")
 
     try:
-        sala_uuid = UUID(str(sala_id))
         autor_uuid = UUID(str(user_id))
     except ValueError:
-        raise HTTPException(status_code=400, detail="Identificador inválido.")
+        raise HTTPException(status_code=400, detail="Identificador de usuário inválido.")
+
+    if not sala_id:
+        membro_recente = db.query(MembroSala).filter(MembroSala.usuario_id == autor_uuid).order_by(MembroSala.created_at.desc()).first()
+        if membro_recente:
+            sala_id = str(membro_recente.sala_id)
+        else:
+            raise HTTPException(status_code=400, detail="sala_id ausente.")
+
+    try:
+        sala_uuid = UUID(str(sala_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Identificador de sala inválido.")
+
+    rate_limiter.check_message_rate(str(autor_uuid))
 
     user = db.query(Usuario).filter(Usuario.id == autor_uuid).first()
     if user and user.is_muted_global:
@@ -956,7 +982,19 @@ async def send_message_legacy(
             MembroSala.usuario_id == autor_uuid
         ).first()
         if not membro:
-            raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
+            room_check = db.query(Sala).filter(Sala.id == sala_uuid).first()
+            if room_check and not room_check.hash_senha:
+                membro = MembroSala(
+                    sala_id=sala_uuid,
+                    usuario_id=autor_uuid,
+                    role="padrao",
+                    is_muted=False
+                )
+                db.add(membro)
+                db.commit()
+                db.refresh(membro)
+            else:
+                raise HTTPException(status_code=403, detail="Você não é membro desta sala.")
         if membro.is_muted:
             raise HTTPException(status_code=403, detail="Você está mutado nesta sala.")
         if membro.role == "view":

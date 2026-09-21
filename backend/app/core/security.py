@@ -62,7 +62,7 @@ class LoginRateLimiter:
             if identifier in self._failed_attempts:
                 del self._failed_attempts[identifier]
 
-    def check_message_rate(self, user_id: str, max_msgs: int = 1, window_seconds: float = 1.0):
+    def check_message_rate(self, user_id: str, max_msgs: int = 5, window_seconds: float = 2.0):
         with self._lock:
             now = time.time()
             self._message_timestamps[user_id] = [
@@ -71,7 +71,7 @@ class LoginRateLimiter:
             if len(self._message_timestamps[user_id]) >= max_msgs:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Limite de taxa excedido (máximo 1 mensagem por segundo)."
+                    detail="Muitas mensagens enviadas rapidamente. Aguarde um instante antes de tentar novamente."
                 )
             self._message_timestamps[user_id].append(now)
 

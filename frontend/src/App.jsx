@@ -19,9 +19,18 @@ export default function App() {
       const savedUser = getCurrentUser();
       if (savedUser) {
         setUser(savedUser);
-        // Atualiza perfil caso tenha mudado no backend
+        if (savedUser.sala_id) {
+          setActiveRoom({
+            id: savedUser.sala_id,
+            nome_url: savedUser.nome_url || 'sala',
+            titulo: savedUser.nome_url || 'Sala',
+          });
+        }
+        // Atualiza perfil caso tenha mudado no backend preservando sala_id e identificadores locais
         const refreshed = await getMe();
-        if (refreshed) setUser(refreshed);
+        if (refreshed) {
+          setUser((prev) => ({ ...prev, ...refreshed }));
+        }
       }
       setLoading(false);
     };
@@ -33,10 +42,14 @@ export default function App() {
     try {
       const roomsData = await fetchMyRooms();
       setRooms(roomsData);
-      // Se não tiver sala ativa selecionada, seleciona a primeira sala disponível
-      if (roomsData.length > 0 && !activeRoom) {
-        setActiveRoom(roomsData[0]);
-      }
+      // Se tiver sala ativa prévia, sincroniza metadados sem perder a seleção; caso contrário, seleciona a primeira
+      setActiveRoom((prev) => {
+        if (prev) {
+          const match = roomsData.find((r) => r.id === prev.id);
+          return match ? { ...prev, ...match } : prev;
+        }
+        return roomsData.length > 0 ? roomsData[0] : null;
+      });
     } catch (err) {
       console.error("Erro ao carregar salas:", err);
     }

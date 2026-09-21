@@ -621,15 +621,17 @@ export default function ChatBox({
     try {
       setSending(true);
 
-      if (activeRoom?.id) {
-        await sendRoomMessage(activeRoom.id, textToSend, replyId, {
-          ttl_seconds: ttlSeconds,
-          is_view_once: isViewOnce,
-          is_secret_mode: activeRoom?.is_secret_mode
-        });
-      } else {
-        await sendMessage(textToSend, replyId);
+      const targetRoomId = roomId || activeRoom?.id || user?.sala_id;
+      if (!targetRoomId) {
+        showToast("Selecione uma sala para enviar sua mensagem.", "warning");
+        return;
       }
+
+      await sendRoomMessage(targetRoomId, textToSend, replyId, {
+        ttl_seconds: ttlSeconds,
+        is_view_once: isViewOnce,
+        is_secret_mode: activeRoom?.is_secret_mode
+      });
       setIsViewOnce(false);
       // Garante scroll até a própria mensagem recém-enviada
       scrollToBottom(true);
@@ -673,15 +675,17 @@ export default function ChatBox({
       setCompressionProgress(100);
 
       const replyId = replyingTo ? replyingTo.id : null;
-      if (activeRoom?.id) {
-        await sendRoomMessage(activeRoom.id, url, replyId, {
-          ttl_seconds: ttlSeconds,
-          is_view_once: isViewOnce,
-          is_secret_mode: activeRoom?.is_secret_mode
-        });
-      } else {
-        await sendMessage(url, replyId);
+      const targetRoomId = roomId || activeRoom?.id || user?.sala_id;
+      if (!targetRoomId) {
+        showToast("Selecione uma sala para enviar arquivos.", "warning");
+        return;
       }
+
+      await sendRoomMessage(targetRoomId, url, replyId, {
+        ttl_seconds: ttlSeconds,
+        is_view_once: isViewOnce,
+        is_secret_mode: activeRoom?.is_secret_mode
+      });
       setIsViewOnce(false);
       setReplyingTo(null);
       scrollToBottom(true);

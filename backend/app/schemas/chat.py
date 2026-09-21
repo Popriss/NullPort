@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 from datetime import datetime, timezone
@@ -19,6 +19,7 @@ def to_utc_iso(dt: Optional[datetime]) -> Optional[str]:
 
 class MessageCreate(BaseModel):
     conteudo: str
+    sala_id: Optional[UUID] = None
     reply_to_id: Optional[UUID] = None
     is_secret_mode: Optional[bool] = False
     ttl_seconds: Optional[int] = None
@@ -47,14 +48,6 @@ class MessageOut(BaseModel):
     e2ee_envelope: Optional[Dict[str, Any]] = None
     status_recibo: Optional[str] = "sent" # 'sent', 'delivered', 'read'
 
-    @field_serializer("created_at")
-    def serialize_created_at(self, dt: datetime, _info) -> str:
-        return to_utc_iso(dt)
-
-    @field_serializer("expires_at", "view_opened_at", check_fields=False)
-    def serialize_optional_datetimes(self, dt: Optional[datetime], _info) -> Optional[str]:
-        return to_utc_iso(dt)
-
     class Config:
         from_attributes = True
 
@@ -71,10 +64,6 @@ class BlockedUserOut(BaseModel):
     bloqueado_id: UUID
     nickname: str
     created_at: datetime
-
-    @field_serializer("created_at")
-    def serialize_created_at(self, dt: datetime, _info) -> str:
-        return to_utc_iso(dt)
 
     class Config:
         from_attributes = True
