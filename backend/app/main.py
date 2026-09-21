@@ -56,6 +56,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(api_router, prefix="/api")
 
 @app.get("/")
+@app.head("/")
 def root():
     return {"message": "NullPort API está rodando perfeitamente!", "status": "online"}
 

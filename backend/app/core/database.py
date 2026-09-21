@@ -29,7 +29,12 @@ def clean_database_url(raw_url: str | None) -> str:
     # Compatibilidade: converte postgres:// para postgresql:// exigido pelo SQLAlchemy
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
-        
+
+    # Supabase exige conexão SSL obrigatória (sslmode=require)
+    if url.startswith("postgresql://") and "sslmode" not in url:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}sslmode=require"
+
     return url
 
 SQLALCHEMY_DATABASE_URL = clean_database_url(os.getenv("DATABASE_URL"))
@@ -44,10 +49,7 @@ try:
 
         connect_args = {
             "connect_timeout": 10,
-            "keepalives": 1,
-            "keepalives_idle": 30,       # Envia TCP KeepAlive a cada 30s para não deixar o NAT do Render fechar a conexão
-            "keepalives_interval": 10,
-            "keepalives_count": 3
+            "sslmode": "require"
         }
 
         if is_transaction_pooler:
