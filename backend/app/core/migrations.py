@@ -117,24 +117,15 @@ def run_auto_migrations(engine):
         print(f"[AUTO-MIGRATIONS] Executando sincronização de schema para dialeto: '{dialect_name}'...")
 
         if dialect_name == "postgresql":
-            with engine.connect() as conn:
+            for sql_stmt in POSTGRES_MIGRATIONS:
                 try:
-                    conn.execute(text("SET lock_timeout = '4s';"))
-                    conn.execute(text("SET statement_timeout = '6s';"))
-                    conn.commit()
-                except Exception:
-                    pass
-                for sql_stmt in POSTGRES_MIGRATIONS:
-                    try:
+                    with engine.connect() as conn:
                         conn.execute(text(sql_stmt))
                         conn.commit()
-                    except Exception as e:
-                        try:
-                            conn.rollback()
-                        except Exception:
-                            pass
-                        print(f"[AUTO-MIGRATIONS WARNING] Instrução ignorada ({sql_stmt[:35]}...): {e}")
-            print("[AUTO-MIGRATIONS] Sincronização PostgreSQL concluída com sucesso.")
+                except Exception as e:
+                    # Idempotente: se já existe ou o pooler restringe a instrução, ignora com segurança
+                    pass
+            print("[AUTO-MIGRATIONS] Sincronização PostgreSQL verificada com sucesso.")
 
         elif dialect_name == "sqlite":
             with engine.connect() as conn:

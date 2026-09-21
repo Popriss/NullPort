@@ -85,6 +85,8 @@ async def run_purge_worker(interval_seconds: int = 15):
     """
     Worker assíncrono em segundo plano para limpeza de salas e mensagens expiradas.
     """
+    # Aguarda 5 segundos para o Uvicorn finalizar o binding inicial de porta
+    await asyncio.sleep(5)
     while True:
         try:
             db = SessionLocal()

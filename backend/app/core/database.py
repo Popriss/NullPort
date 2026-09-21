@@ -49,7 +49,11 @@ try:
 
         connect_args = {
             "connect_timeout": 10,
-            "sslmode": "require"
+            "sslmode": "require",
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5
         }
 
         if is_transaction_pooler:
