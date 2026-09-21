@@ -68,9 +68,10 @@ try:
             engine = create_engine(
                 SQLALCHEMY_DATABASE_URL,
                 pool_pre_ping=True,       # Testa a conexão antes de usar; reconecta silenciosamente se estiver morta
-                pool_recycle=60,          # Recicla conexões a cada 60s (evita que o pooler do Supabase feche conexões ociosas)
-                pool_size=5,              # Pool conservador para não esgotar as conexões do plano gratuito do Supabase
-                max_overflow=5,
+                pool_recycle=300,         # Recicla conexões a cada 5m
+                pool_size=10,             # Pool equilibrado
+                max_overflow=20,          # Até 20 conexões adicionais sob picos
+                pool_timeout=15,          # Timeout defensivo de 15s
                 connect_args=connect_args
             )
 except Exception as e:

@@ -122,6 +122,15 @@ export default function ChatBox({
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const isPrependingRef = useRef(false);
+  const activeRoomRef = useRef(activeRoom);
+  useEffect(() => {
+    activeRoomRef.current = activeRoom;
+  }, [activeRoom]);
+
+  const showScrollBottomButtonRef = useRef(showScrollBottomButton);
+  useEffect(() => {
+    showScrollBottomButtonRef.current = showScrollBottomButton;
+  }, [showScrollBottomButton]);
 
   // RN02: Inicialização da proteção de tela e anti-captura web
   useEffect(() => {
@@ -377,7 +386,7 @@ export default function ChatBox({
   const notifyNewMessage = (msg) => {
     if (document.hidden && "Notification" in window && Notification.permission === "granted") {
       // RN05: Notificações cegas do SO para chats efêmeros e secretos
-      const isBlind = msg.is_secret_mode || activeRoom?.is_secret_mode || Boolean(msg.ttl_seconds) || msg.is_view_once;
+      const isBlind = msg.is_secret_mode || activeRoomRef.current?.is_secret_mode || Boolean(msg.ttl_seconds) || msg.is_view_once;
       const notifTitle = isBlind ? 'NullPort' : `Nova mensagem em #${roomTitle}`;
       const notifBody = isBlind ? 'Nova mensagem confidencial recebida.' : `${msg.autor_nickname}: ${msg.conteudo.slice(0, 80)}`;
 
@@ -394,9 +403,7 @@ export default function ChatBox({
 
     const loadMessages = async () => {
       try {
-        const data = activeRoom?.id
-          ? await fetchRoomMessages(roomId, 100)
-          : await fetchMessages(100);
+        const data = await fetchRoomMessages(roomId, 100);
         setMessages(data);
         setHasMore(data.length >= 100);
       } catch (err) {
@@ -540,7 +547,7 @@ export default function ChatBox({
         }
       }
 
-      if (showScrollBottomButton) {
+      if (showScrollBottomButtonRef.current) {
         setUnreadBelowCount((prev) => prev + 1);
       }
 
@@ -553,7 +560,7 @@ export default function ChatBox({
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [roomId, activeRoom, showScrollBottomButton]);
+  }, [roomId]);
 
   // Scroll automático inteligente throttled e não-bloqueante
   useEffect(() => {

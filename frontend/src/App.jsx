@@ -46,7 +46,13 @@ export default function App() {
       setActiveRoom((prev) => {
         if (prev) {
           const match = roomsData.find((r) => r.id === prev.id);
-          return match ? { ...prev, ...match } : prev;
+          if (match) {
+            if (match.nome_url !== prev.nome_url || match.titulo !== prev.titulo || match.is_secret_mode !== prev.is_secret_mode) {
+              return { ...prev, ...match };
+            }
+            return prev;
+          }
+          return prev;
         }
         return roomsData.length > 0 ? roomsData[0] : null;
       });
